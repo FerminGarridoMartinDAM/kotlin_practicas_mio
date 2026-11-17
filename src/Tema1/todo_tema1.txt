@@ -1,0 +1,2088 @@
+﻿=== ARCHIVO: 001.kt ===
+/*
+Este archivo introduce la creaciÃ³n de subprocesos mediante ProcessBuilder
+invocando a los tres intÃ©rpretes de comandos principales segÃºn el entorno
+(bash en Linux/WSL, powershell en Windows y cmd en Windows)
+y la lectura de su flujo de salida estÃ¡ndar.
+*/
+
+/*
+Puntos clave para estudio de 001.kt:
+
+* Comandos internos vs. ejecutables externos:
+    Comandos como cd, dir o Get-ChildItem no son programas independientes en disco, sino funciones internas de la shell.
+    Si haces ProcessBuilder("dir").start() directamente, fallarÃ¡ con una excepciÃ³n (IOException) porque el sistema operativo busca un archivo dir.exe que no existe.
+
+* Nomenclatura invertida de los Streams en la clase Process:
+    process.inputStream  -> Conectado al stdout (salida normal) del hijo.
+    process.outputStream -> Conectado al stdin (entrada de datos) del hijo.
+    process.errorStream  -> Conectado al stderr (salida de errores) del hijo.
+*/
+
+// Define que este archivo pertenece al paquete Tema1 dentro de la estructura del proyecto
+package Tema1
+
+// Importa BufferedReader: envuelve un Reader para leer texto de forma eficiente usando un buffer en memoria (permite leer lÃ­neas enteras)
+import java.io.BufferedReader
+// Importa InputStreamReader: actÃºa como puente traduciendo flujos de bytes (InputStream) a flujos de caracteres (Reader) segÃºn la codificaciÃ³n
+import java.io.InputStreamReader
+
+
+fun main() {
+    // 1. ProcessBuilder("bash", "-c", "cd / && ls"):
+    //    - "bash": Invoca al intÃ©rprete de comandos Bourne Again SHell.
+    //    - "-c": Flag que indica a bash que lea y ejecute el comando contenido en el siguiente String.
+    //    - "cd / && ls": Comando compuesto; primero cambia al directorio raÃ­z (/) y, solo si tuvo Ã©xito (operador lÃ³gico &&), ejecuta 'ls' para listar su contenido.
+    // 2. .start(): Solicita al Sistema Operativo que cree un nuevo proceso hijo y comience su ejecuciÃ³n inmediatamente. Devuelve un objeto de tipo Process.
+    val process = ProcessBuilder("bash","-c","cd / && ls").start()
+
+    // process.inputStream: Aunque se llame "inputStream", representa la SALIDA estÃ¡ndar (stdout) del proceso hijo.
+    // Se llama inputStream porque, desde el punto de vista de nuestro programa padre en Kotlin, los datos "entran" hacia nosotros.
+    // Se envuelve en InputStreamReader (bytes -> caracteres) y luego en BufferedReader (caracteres -> lÃ­neas).
+    val reader = BufferedReader(InputStreamReader(process.inputStream))
+
+    // reader.lines(): Devuelve un Stream<String> de Java 8+ con todas las lÃ­neas que el proceso hijo va imprimiendo.
+    // .forEach { println(it) }: Recorre el flujo e imprime por la consola de Kotlin cada lÃ­nea ('it') hasta que el proceso hijo cierra su salida.
+    reader.lines().forEach { println(it) }
+}
+
+/*
+// Segundo ejemplo (comentado): EjecuciÃ³n de un cmdlet en Windows PowerShell
+fun Poo.main() {
+    // Get-ChildItem es un cmdlet interno de PowerShell (equivalente a ls o dir).
+    // No es un archivo .exe independiente, por lo que es obligatorio llamar primero al ejecutable "powershell" con el parÃ¡metro "-Command".
+    val process = ProcessBuilder("powershell", "-Command", "Get-ChildItem").start()
+
+    // DETALLE CRÃTICO EN POWERSHELL:
+    // process.outputStream representa la ENTRADA estÃ¡ndar (stdin) del proceso hijo.
+    // PowerShell a menudo se queda esperando a que su entrada estÃ¡ndar se cierre antes de terminar de ejecutarse.
+    // Al hacer .close(), le enviamos un EOF (End Of File) indicÃ¡ndole que no le vamos a enviar mÃ¡s comandos ni datos por teclado.
+    process.outputStream.close() // Cerramos la entrada para que PowerShell no espere datos
+
+    // Leemos la salida estÃ¡ndar del proceso de PowerShell igual que en el caso anterior
+    val reader = BufferedReader(InputStreamReader(process.inputStream))
+    reader.lines().forEach { println(it) }
+}
+*/
+
+/*
+// Tercer ejemplo (comentado): EjecuciÃ³n de un comando interno en el sÃ­mbolo del sistema (CMD de Windows)
+fun Poo.main() {
+    // 'dir' no existe como archivo dir.exe en C:\Windows\System32; estÃ¡ integrado dentro de cmd.exe.
+    // Por eso debemos invocar a "cmd".
+    // OJO / ERRATA EN EL CÃ“DIGO ORIGINAL: El modificador estÃ¡ escrito como "c/", pero en Windows CMD la sintaxis correcta es "/c"
+    // ("/c" ejecuta el comando que le sigue y cierra la instancia de cmd; "/k" la mantendrÃ­a abierta).
+    val process = ProcessBuilder("cmd", "c/", "dir").start()
+    val reader = BufferedReader(InputStreamReader(process.inputStream))
+    reader.lines().forEach { println(it) }
+}
+*/
+
+=== ARCHIVO: 002.kt ===
+/*
+Este archivo profundiza en cÃ³mo pasar modificadores (flags), argumentos adicionales
+y tuberÃ­as (pipes) a los comandos ejecutados dentro de cmd, powershell y bash.
+*/
+
+/*
+Puntos clave para estudio de 002.kt:
+
+* CÃ³mo agrupar argumentos en ProcessBuilder segÃºn el intÃ©rprete:
+    - En CMD: Puedes separar cada elemento como Strings individuales ("cmd", "/c", "dir", "/q") porque cmd.exe concatena todo lo que recibe tras /c.
+    - En Bash (-c) y PowerShell (-Command): Es mucho mÃ¡s seguro pasar toda la orden compuesta dentro de un Ãºnico String tras el flag (por ejemplo, "ls -l" o "Get-ChildItem | Format-List") para que el intÃ©rprete procese los espacios, argumentos y tuberÃ­as correctamente.
+
+* Uso de tuberÃ­as internas del intÃ©rprete:
+    Al ejecutar "Get-ChildItem | Format-List" dentro de PowerShell, la tuberÃ­a (|) la resuelve el propio intÃ©rprete PowerShell antes de devolver el resultado final a Kotlin por el inputStream.
+*/
+
+// Define que este archivo pertenece al paquete Tema1
+package Tema1
+
+// Importaciones necesarias para leer el flujo de salida del proceso lÃ­nea a lÃ­nea
+import java.io.BufferedReader
+import java.io.InputStreamReader
+
+fun main() {
+    // Ejecuta el intÃ©rprete "cmd" de Windows pasando cada token como un argumento separado en ProcessBuilder:
+    // - "cmd": El ejecutable del intÃ©rprete de comandos de Windows.
+    // - "/c": Bandera correcta que ordena a CMD ejecutar el comando y finalizar la consola.
+    // - "dir": Comando interno para listar archivos y carpetas del directorio de trabajo actual.
+    // - "/q": Modificador del comando 'dir' que muestra el propietario (owner) de cada archivo.
+    val process = ProcessBuilder("cmd", "/c", "dir", "/q").start()
+
+    // Creamos el lector con buffer conectado a la salida estÃ¡ndar (stdout) del subproceso
+    val reader = BufferedReader(InputStreamReader(process.inputStream))
+
+    // Consumimos e imprimimos cada lÃ­nea generada por el comando 'dir /q'
+    reader.lines().forEach { println(it) }
+}
+
+
+/*
+// Variante comentada 1: Uso de tuberÃ­as (pipes) internas en PowerShell
+import java.io.BufferedReader
+import java.io.InputStreamReader
+
+fun Poo.main() {
+    // Todo lo que va en el String despuÃ©s de "-Command" es la orden que interpreta PowerShell.
+    // "Get-ChildItem | Format-List": Obtiene la lista de elementos del directorio actual y la redirige (|)
+    // al cmdlet Format-List, que muestra todas las propiedades de cada fichero en formato de lista vertical detallada.
+    val process = ProcessBuilder("powershell", "-Command", "Get-ChildItem | Format-List").start()
+
+    // Cerramos el flujo de entrada estÃ¡ndar del hijo (stdin) para evitar que PowerShell quede bloqueado esperando entrada
+    process.outputStream.close()
+
+    // Leemos y mostramos el resultado lÃ­nea por lÃ­nea
+    val reader = BufferedReader(InputStreamReader(process.inputStream))
+    reader.lines().forEach { println(it) }
+}
+*/
+
+/*
+// Variante comentada 2: Listado detallado en Bash
+import java.io.BufferedReader
+import java.io.InputStreamReader
+
+fun Poo.main() {
+    // Invoca a bash con "-c" y le pasa "ls -l" como un Ãºnico String.
+    // El flag "-l" (long format) muestra permisos rwx, nÃºmero de enlaces, propietario, grupo, tamaÃ±o en bytes, fecha y nombre.
+    val process = ProcessBuilder("bash","-c","ls -l").start()
+    val reader = BufferedReader(InputStreamReader(process.inputStream))
+    reader.lines().forEach { println(it) }
+}
+*/
+
+=== ARCHIVO: 003.kt ===
+/*
+Este archivo aborda la gestiÃ³n de errores en procesos hijos y demuestra la diferencia
+fundamental entre un fallo al lanzar el ejecutable desde la JVM (IOException)
+y un fallo reportado por el intÃ©rprete de comandos a travÃ©s del canal de error estÃ¡ndar (errorStream).
+*/
+
+/*
+Puntos clave para estudio de 003.kt:
+
+* Diferencia crÃ­tica de examen entre IOException y errorStream:
+    1. Si haces ProcessBuilder("comando_inexistente").start() directamente:
+       El sistema operativo le dice a la JVM que no existe ningÃºn archivo binario con ese nombre, y start() aborta lanzando una IOException en Kotlin. No llega a crearse ningÃºn objeto Process ni hay errorStream que leer.
+    2. Si haces ProcessBuilder("bash", "-c", "comando_inexistente").start():
+       El binario '/bin/bash' SÃ existe en el sistema operativo, por lo que el proceso arranca sin lanzar IOException. Cuando bash intenta buscar "comando_inexistente" y no lo encuentra, es el propio bash quien escribe el mensaje de error en su salida de error estÃ¡ndar (process.errorStream) y termina con cÃ³digo de salida 127.
+
+* FunciÃ³n de redirectErrorStream(Boolean):
+    - En false (valor por defecto): Mantiene separados los canales. La salida normal se lee en process.inputStream y los errores en process.errorStream.
+    - En true: Fusiona ambos canales. Todos los mensajes (normales y de error) se leen juntos desde process.inputStream, y process.errorStream queda vacÃ­o.
+*/
+
+// Define que este archivo pertenece al paquete Tema1
+package Tema1
+
+// Comentario original del profesor:
+// Lanzamos el comando a travÃ©s del intÃ©rprete porque,
+// si se pasa directamente a ProcessBuilder, start()
+// lanza una IOException (el ejecutable no existe)
+// y no llega a haber ninguna salida de error que leer.
+// En cambio, el intÃ©rprete sÃ­ arranca y es Ã©l quien escribe
+// el error en su salida de error.
+
+
+import java.io.BufferedReader
+import java.io.InputStreamReader
+
+fun main() {
+    // Configuramos ProcessBuilder para que arranque 'bash' y este intente ejecutar "comando_inexistente".
+    // Como el ejecutable 'bash' sÃ­ existe en el sistema operativo, pb.start() tendrÃ¡ Ã©xito.
+    val pb = ProcessBuilder("bash", "-c", "comando_inexistente")
+
+    // redirectErrorStream(false): Indica que NO queremos mezclar la salida de error (stderr) con la salida estÃ¡ndar (stdout).
+    // De este modo, stdout irÃ¡ por process.inputStream y stderr irÃ¡ por process.errorStream.
+    pb.redirectErrorStream(false)
+
+    // Arranca el proceso hijo en el sistema operativo
+    val process = pb.start()
+
+    // Lector conectado a la salida estÃ¡ndar del hijo (descriptor de fichero 1 en Linux: stdout)
+    val stdOut = BufferedReader(InputStreamReader(process.inputStream))
+
+    // Lector conectado a la salida de error del hijo (descriptor de fichero 2 en Linux: stderr)
+    val stdErr = BufferedReader(InputStreamReader(process.errorStream))
+
+    // Intentamos leer la salida normal; como el comando fallÃ³, este flujo estarÃ¡ vacÃ­o (no imprimirÃ¡ lÃ­neas)
+    println("Salida estÃ¡ndar:")
+    stdOut.lines().forEach { println(it) }
+
+    // Leemos la salida de error; aquÃ­ bash habrÃ¡ escrito: "bash: comando_inexistente: command not found"
+    println("Salida de error:")
+    stdErr.lines().forEach { println(it) }
+}
+
+=== ARCHIVO: 004.kt ===
+/*
+Este archivo introduce la sincronizaciÃ³n bÃ¡sica entre el proceso padre y el proceso hijo
+mediante el mÃ©todo bloqueante waitFor().
+*/
+
+/*
+Puntos clave para estudio de 004.kt:
+
+* Comportamiento de waitFor():
+    Convierte la ejecuciÃ³n del subproceso en sÃ­ncrona respecto al hilo que lo llama.
+    El hilo principal del padre se queda pausado (bloqueado) en la lÃ­nea process.waitFor() hasta que el proceso hijo termina en el sistema operativo.
+    AdemÃ¡s, waitFor() devuelve un Int con el cÃ³digo de salida (exit code: 0 = Ã©xito, distinto de 0 = error).
+    Si no pusiÃ©ramos waitFor(), "Proceso finalizado." se imprimirÃ­a inmediatamente despuÃ©s de arrancar el hijo, sin esperar a que termine.
+
+* Trampa tÃ©cnica con "bash", "-c" y argumentos separados:
+    En este cÃ³digo se escribiÃ³ ProcessBuilder("bash", "-c", "sleep", "2").
+    En Bash, la opciÃ³n "-c" solo lee el PRIMER String siguiente ("sleep") como comando a ejecutar, y asigna los siguientes Strings ("2") a las variables posicionales ($0, $1...).
+    Por tanto, bash ejecuta "sleep" sin argumentos, falla inmediatamente por "falta un operando" y no duerme los 2 segundos.
+    Para que funcione correctamente con bash -c debe escribirse en un solo String: ProcessBuilder("bash", "-c", "sleep 2")
+    o bien invocar directamente al binario sin bash: ProcessBuilder("sleep", "2").
+*/
+
+// Define que este archivo pertenece al paquete Tema1
+package Tema1
+
+fun main() {
+    // Mensaje impreso por el proceso padre antes de lanzar el proceso hijo
+    println("Iniciando proceso...")
+
+    // Crea y arranca el proceso hijo.
+    // (Nota: Recuerda que en bash -c conviene unir "sleep 2" en un solo String para que no ignore el "2").
+    val process = ProcessBuilder("bash","-c","sleep", "2").start()
+
+    // process.waitFor(): Bloquea la ejecuciÃ³n del proceso padre en esta lÃ­nea
+    // hasta que el proceso hijo haya terminado por completo en el sistema operativo.
+    process.waitFor()
+
+    // Esta lÃ­nea solo se alcanza y ejecuta una vez que el subproceso ha finalizado
+    println("Proceso finalizado.")
+}
+
+=== ARCHIVO: 005.kt ===
+/*
+Este archivo muestra cÃ³mo ejecutar el comando de monitorizaciÃ³n de procesos 'ps' (Process Status)
+en Linux/Bash y capturar su tabla de resultados desde Kotlin.
+*/
+
+/*
+Puntos clave para estudio de 005.kt:
+
+* Funcionamiento del comando 'ps':
+    Ejecutado sin argumentos adicionales, 'ps' muestra una instantÃ¡nea de los procesos activos asociados a la terminal/sesiÃ³n actual, devolviendo columnas como PID (identificador del proceso), TTY (terminal), TIME (tiempo de CPU) y CMD (comando ejecutado).
+
+* Lectura del flujo hasta el cierre del proceso:
+    El mÃ©todo reader.lines().forEach { ... } consume las lÃ­neas a medida que 'ps' las escribe en su stdout y termina automÃ¡ticamente cuando el comando 'ps' finaliza y cierra su flujo de salida.
+*/
+
+// Define que este archivo pertenece al paquete Tema1
+package Tema1
+
+// Importaciones para envolver el flujo de bytes del proceso y leerlo como texto lÃ­nea a lÃ­nea
+import java.io.BufferedReader
+import java.io.InputStreamReader
+
+fun main() {
+    // Lanza el intÃ©rprete bash para que ejecute el comando 'ps'
+    val process = ProcessBuilder("bash","-c","ps").start()
+
+    // Abre el canal de lectura con buffer sobre la salida estÃ¡ndar del comando 'ps'
+    val reader = BufferedReader(InputStreamReader(process.inputStream))
+
+    // Recorre todas las lÃ­neas devueltas (la cabecera de la tabla y cada proceso activo) y las muestra por consola
+    reader.lines().forEach { println(it) }
+}
+
+=== ARCHIVO: 006.kt ===
+/*
+Este archivo combina la programaciÃ³n multihilo (kotlin.concurrent.thread) con la programaciÃ³n
+multiproceso (ProcessBuilder) para lanzar varios procesos pesados o lentos en paralelo
+y esperar a que todos terminen utilizando join().
+*/
+
+/*
+Puntos clave para estudio de 006.kt:
+
+* Â¿Por quÃ© envolver ProcessBuilder dentro de un hilo (thread)?
+    Aunque ProcessBuilder.start() arranca el proceso de forma asÃ­ncrona, process.waitFor() es bloqueante.
+    Si hiciÃ©ramos un bucle normal en el main llamando a start() y waitFor(), no se lanzarÃ­a el segundo proceso hasta que terminara el primero (ejecuciÃ³n secuencial: 1s + 2s + 3s = 6 segundos).
+    Al meter start() + waitFor() dentro de un bloque thread { ... }, cada hilo secundario se queda bloqueado en su propio waitFor(), permitiendo que los 3 procesos se ejecuten simultÃ¡neamente en el Sistema Operativo (tiempo total = 3 segundos).
+
+* Diferencia entre waitFor() y join():
+    - process.waitFor() -> El hilo de Kotlin espera a que termine un PROCESO externo del Sistema Operativo.
+    - hilo.join()       -> El hilo principal (main) espera a que termine otro HILO dentro de la misma JVM.
+*/
+
+// Define que este archivo pertenece al paquete Tema1
+package Tema1
+
+// Importa la funciÃ³n 'thread' de Kotlin, que crea e inicia automÃ¡ticamente un objeto Thread de Java
+import kotlin.concurrent.thread
+
+fun main() {
+    // Lista inmutable con los segundos que debe durar cada proceso (como Strings)
+    val comandos = listOf("1", "2", "3")
+
+    // comandos.map { ... }: Transforma cada elemento de la lista ("1", "2", "3") en un hilo (Thread) ya en ejecuciÃ³n.
+    // La variable 'hilos' resultante es de tipo List<Thread>.
+    val hilos = comandos.map { segundos ->
+        // Crea y arranca un nuevo hilo concurrente para gestionar este subproceso
+        thread {
+            // El hilo lanza su proceso correspondiente.
+            // (Nota: igual que en 004.kt, en bash -c deberÃ­a escribirse ProcessBuilder("bash", "-c", "sleep $segundos") para que tome el argumento).
+            val process = ProcessBuilder("bash","-c","sleep", segundos).start()
+
+            // Bloquea ÃšNICAMENTE a este hilo secundario hasta que su proceso 'sleep' termine
+            process.waitFor()
+
+            // Informa por consola quÃ© proceso acaba de terminar
+            println("Proceso sleep $segundos terminado")
+        }
+    }
+
+    // Recorre la lista de los 3 hilos lanzados y llama a .join() en cada uno.
+    // Esto obliga al hilo principal (main) a esperar hasta que los 3 hilos hayan acabado antes de finalizar el programa.
+    hilos.forEach { it.join() }
+}
+
+=== ARCHIVO: 007.kt ===
+/*
+Este archivo implementa una tuberÃ­a (pipe) programÃ¡tica entre dos procesos hijos independientes
+utilizando el mÃ©todo InputStream.transferTo(OutputStream) para conectar la salida del primero
+con la entrada del segundo desde Kotlin.
+*/
+
+/*
+Puntos clave para estudio de 007.kt:
+
+* Funcionamiento de transferTo():
+    Lee todos los bytes que escupe el primer proceso por su salida estÃ¡ndar (echo.inputStream) y los escribe directamente en la entrada estÃ¡ndar del segundo proceso (tr.outputStream).
+    Equivale a ejecutar en la terminal de Linux: echo hola | tr a-z A-Z
+
+* Importancia vital de cerrar el outputStream del proceso receptor (tr.outputStream.close()):
+    Comandos filtro como 'tr', 'grep', 'wc' o 'sort' se quedan leyendo de su entrada estÃ¡ndar indefinidamente hasta que reciben la seÃ±al de fin de archivo (EOF - End Of File).
+    Si olvidamos poner tr.outputStream.close(), el comando 'tr' creerÃ¡ que el padre aÃºn puede enviarle mÃ¡s texto, nunca terminarÃ¡, y nuestro programa se quedarÃ¡ colgado (deadlock) al intentar leer su salida en reader.lines().
+*/
+
+// Define que este archivo pertenece al paquete Tema1
+package Tema1
+
+import java.io.BufferedReader
+import java.io.InputStreamReader
+
+fun main() {
+    // 1. Arranca el primer proceso hijo: ejecuta 'echo hola', que escribe "hola\n" en su stdout (echo.inputStream)
+    val echo = ProcessBuilder("bash", "-c", "echo hola").start()
+
+    // 2. Arranca el segundo proceso hijo: ejecuta 'tr a-z A-Z' (translate), que queda a la espera de recibir texto
+    //    por su stdin (tr.outputStream) para convertir los caracteres de minÃºsculas (a-z) a mayÃºsculas (A-Z).
+    val tr = ProcessBuilder("bash", "-c","tr a-z A-Z").start()
+
+    // 3. Transfiere todos los bytes desde la salida estÃ¡ndar de 'echo' hacia la entrada estÃ¡ndar de 'tr'
+    echo.inputStream.transferTo(tr.outputStream)
+
+    // 4. IMPRESCINDIBLE: Cierra la entrada estÃ¡ndar de 'tr' para enviarle la seÃ±al EOF (Fin de Archivo)
+    //    y que 'tr' procese los datos y termine su ejecuciÃ³n.
+    tr.outputStream.close()
+
+    // 5. Conectamos un BufferedReader a la salida estÃ¡ndar del segundo proceso ('tr.inputStream')
+    val reader = BufferedReader(InputStreamReader(tr.inputStream))
+
+    // 6. Leemos e imprimimos el resultado final transformado por 'tr': "HOLA"
+    reader.lines().forEach { println(it) }
+}
+
+=== ARCHIVO: 008.kt ===
+/*
+Este archivo realiza un muestreo periÃ³dico (polling) de los procesos que mÃ¡s CPU consumen
+en el sistema operativo utilizando un bucle repeat, pausas con Thread.sleep, tuberÃ­as nativas de Bash
+y la sintaxis funcional idiomÃ¡tica de Kotlin para lectura de flujos.
+*/
+
+/*
+Puntos clave para estudio de 008.kt:
+
+* Desglose del comando de Bash "ps -eo pid,comm,%cpu --sort=-%cpu | head -n 4":
+    - ps -e: Selecciona todos los procesos activos del sistema.
+    - -o pid,comm,%cpu: Indica el formato de salida mostrando solo 3 columnas (PID, nombre del comando y % de uso de CPU).
+    - --sort=-%cpu: Ordena los resultados por la columna %cpu en orden descendente (el signo '-' indica de mayor a menor).
+    - | head -n 4: EnvÃ­a la tabla por una tuberÃ­a a 'head' para cortar y mostrar Ãºnicamente las 4 primeras lÃ­neas (la lÃ­nea de tÃ­tulos + el Top 3 de procesos).
+
+* Lectura idiomÃ¡tica en Kotlin:
+    En lugar de escribir BufferedReader(InputStreamReader(top.inputStream)), Kotlin ofrece la funciÃ³n de extensiÃ³n .bufferedReader() directamente sobre cualquier InputStream.
+    AdemÃ¡s, .forEach(::println) utiliza una referencia a funciÃ³n (::println), que es mÃ¡s concisa que escribir { println(it) }.
+*/
+
+// Nota: En el archivo original se omitiÃ³ 'package Tema1', por lo que si estÃ¡ en la carpeta Tema1
+// el IDE puede sugerir aÃ±adir 'package Tema1' al principio del fichero.
+fun main() {
+
+    // repeat(3) { ... }: Ejecuta el bloque de cÃ³digo 3 veces seguidas.
+    // En cada vuelta, la variable implÃ­cita 'it' vale 0, 1 y 2 respectivamente.
+    repeat(3) {
+
+        // Pausa el hilo actual durante 2000 milisegundos (2 segundos) entre cada muestra
+        Thread.sleep(2000)
+
+        // Lanza el subproceso en bash que obtiene el Top 3 de procesos con mayor consumo de CPU
+        val top = ProcessBuilder("bash",
+            "-c",
+            "ps -eo pid,comm,%cpu --sort=-%cpu | head -n 4"
+        ).start()
+
+        // Imprime el encabezado de la muestra actual (sumando 1 a 'it' para que muestre 1, 2 y 3)
+        println("=== Muestra ${it + 1} ===")
+
+        // .bufferedReader(): ExtensiÃ³n de Kotlin que envuelve el InputStream en un BufferedReader (UTF-8 por defecto).
+        // .lines(): Obtiene el Stream de lÃ­neas de texto.
+        // .forEach(::println): Imprime cada lÃ­nea por consola usando referencia a mÃ©todo.
+        top.inputStream.bufferedReader()
+            .lines()
+            .forEach(::println)
+    }
+}
+
+=== ARCHIVO: 009hijo.kt ===
+/*
+Este archivo define un programa sencillo en Kotlin diseÃ±ado para ser compilado como un paquete
+ejecutable independiente (hijo.jar) que posteriormente serÃ¡ invocado como proceso hijo
+desde otro programa Kotlin (009Lanzador.kt).
+*/
+
+/*
+Puntos clave para estudio de 009hijo.kt:
+
+* CompilaciÃ³n desde lÃ­nea de comandos con kotlinc:
+    Para que un archivo .kt pueda ejecutarse mediante "java -jar", debemos compilarlo usando el compilador de Kotlin (kotlinc) con dos parÃ¡metros clave:
+    1. -include-runtime: Empaqueta dentro del archivo .jar la librerÃ­a estÃ¡ndar de Kotlin (kotlin-stdlib). Si no se incluye, al intentar ejecutarlo con "java -jar hijo.jar" fallarÃ¡ con un error NoClassDefFoundError porque la JVM estÃ¡ndar no trae las librerÃ­as de Kotlin preinstaladas.
+    2. -d hijo.jar: Indica el destino (destination) o nombre del archivo .jar ejecutable resultante, generando automÃ¡ticamente el archivo MANIFEST.MF con la clase principal (Main-Class: Tema1._009hijoKt).
+
+* ComunicaciÃ³n con el proceso padre:
+    Cualquier llamada a print() o println() dentro de este programa escribe en su salida estÃ¡ndar (stdout). Cuando 009Lanzador.kt lo ejecute como subproceso, esa salida quedarÃ¡ conectada al canal process.inputStream del padre.
+*/
+
+// Define que este archivo pertenece al paquete Tema1
+package Tema1
+
+
+// Comentario original del profesor con la ruta al compilador kotlinc integrado en IntelliJ IDEA:
+// El operador '&' en PowerShell (call operator) permite ejecutar un comando cuya ruta estÃ¡ entre comillas y contiene espacios.
+// & "C:\Program Files\JetBrains\IntelliJ IDEA Community Edition 2025.2.2\plugins\Kotlin\kotlinc.ide\bin\kotlinc.bat"
+// 009hijo.kt -include-runtime -d hijo.jar
+
+// Comentario original del profesor:
+// Lo podemos aÃ±adir al PATH si vemos que lo vamos a usar mucho
+
+fun main() {
+    // Imprime un saludo por la salida estÃ¡ndar (stdout) del proceso hijo y termina su ejecuciÃ³n con cÃ³digo 0
+    println("Â¡Hola desde el proceso hijo!")
+}
+
+=== ARCHIVO: 009Lanzador.kt ===
+/*
+Este archivo actÃºa como proceso padre ("Lanzador"): levanta una nueva instancia de la
+MÃ¡quina Virtual de Java (JVM) para ejecutar el archivo empaquetado hijo.jar (creado a partir de 009hijo.kt),
+captura toda su salida por consola y muestra su cÃ³digo de finalizaciÃ³n.
+*/
+
+/*
+Puntos clave para estudio de 009Lanzador.kt:
+
+* EjecuciÃ³n de un .jar como proceso hijo:
+    No podemos pasar directamente "hijo.jar" como primer argumento de ProcessBuilder porque un archivo .jar no es un binario nativo del sistema operativo (.exe o ELF).
+    Debemos invocar al ejecutable "java" con la opciÃ³n "-jar" seguida de la ruta al fichero ("src/Tema1/hijo.jar"). Esto crea un nuevo proceso del sistema operativo con su propia JVM independiente.
+
+* Encadenamiento de mÃ©todos (Method Chaining) en ProcessBuilder:
+    ProcessBuilder permite configurar opciones como .redirectErrorStream(true) y llamar directamente a .start() en una sola expresiÃ³n fluida.
+    Con .redirectErrorStream(true), si el proceso hijo lanzara alguna excepciÃ³n (por ejemplo, FileNotFoundException si la ruta al .jar estuviera mal), el mensaje de error de Java saldrÃ­a por el mismo canal process.inputStream y lo verÃ­amos en consola prefijado con "[hijo]: ".
+*/
+
+// Define que este archivo pertenece al paquete Tema1
+package Tema1
+
+fun main() {
+    // Comentario original del profesor:
+    // El proceso hijo es una nueva JVM que ejecuta hijo.jar
+    // 1. ProcessBuilder("java", "-jar", "src/Tema1/hijo.jar"): Prepara el comando para lanzar java ejecutando el jar.
+    // 2. .redirectErrorStream(true): Fusiona la salida de error (stderr) con la salida estÃ¡ndar (stdout) del hijo.
+    // 3. .start(): Inicia el subproceso y devuelve el objeto Process.
+    val process = ProcessBuilder("java", "-jar", "src/Tema1/hijo.jar")
+        .redirectErrorStream(true)
+        .start()
+
+    // Obtiene un BufferedReader sobre la salida del hijo (process.inputStream),
+    // recorre todas las lÃ­neas que el hijo imprima y las muestra en la consola del padre aÃ±adiendo la etiqueta "[hijo]: " delante.
+    process.inputStream.bufferedReader().lines().forEach { println("[hijo]: $it") }
+
+    // process.waitFor() bloquea al padre hasta que la JVM hija termine y devuelve su cÃ³digo de salida (0 si todo fue bien).
+    println("El hijo terminÃ³ con cÃ³digo ${process.waitFor()}")
+}
+
+=== ARCHIVO: 010.kt ===
+package Tema1
+
+
+=== ARCHIVO: 011.kt ===
+/*
+Este archivo desarrolla un ejercicio prÃ¡ctico completo en 6 pasos que combina la gestiÃ³n de ficheros
+temporales desde Kotlin (File.createTempFile) con la ejecuciÃ³n secuencial de tres procesos en Bash
+que utilizan redirecciones de salida (>) y de entrada (<) para escribir, contar lÃ­neas y leer el archivo.
+*/
+
+/*
+Puntos clave para estudio de 011.kt:
+
+* CreaciÃ³n y borrado de archivos temporales (File.createTempFile y deleteOnExit):
+    - File.createTempFile("practica", ".txt") crea un fichero real en el directorio temporal del sistema operativo (p. ej., /tmp en Linux o C:\Users\...\AppData\Local\Temp en Windows), aÃ±adiendo un nÃºmero aleatorio en medio del nombre (ej. practica84920192.txt) para evitar colisiones.
+    - archivoTemporal.deleteOnExit() registra un gancho (shutdown hook) en la JVM para que el archivo se elimine automÃ¡ticamente cuando el programa Kotlin termine de ejecutarse.
+
+* Redirecciones en Bash (> y <):
+    - Operador '>': Redirige la salida estÃ¡ndar (stdout) de un comando hacia un archivo, sobrescribiendo su contenido (usado con printf). (Si fuera '>>', aÃ±adirÃ­a al final sin borrar).
+    - Operador '<': Redirige el contenido de un archivo hacia la entrada estÃ¡ndar (stdin) de un comando (usado en "wc -l < archivo", lo que hace que wc -l imprima solo el nÃºmero "4" en lugar de "4 ruta/al/archivo").
+
+* Por quÃ© es obligatorio usar .waitFor() entre cada paso:
+    Los 3 procesos (escribir, contar y leer) operan sobre el mismo fichero fÃ­sico.
+    Si no llamÃ¡ramos a escribir.waitFor() antes de lanzar el proceso 'contar', se producirÃ­a una condiciÃ³n de carrera (race condition): 'wc -l' y 'cat' podrÃ­an leer el archivo cuando 'printf' aÃºn no ha terminado de escribir las 4 lÃ­neas en el disco, devolviendo 0 lÃ­neas o texto incompleto.
+
+* Diferencia entre .lines().forEach y .readText():
+    AquÃ­ se usa .bufferedReader().readText(), que lee todo el flujo de salida del proceso de golpe y lo devuelve en un Ãºnico String (incluyendo saltos de lÃ­nea), aplicando .trim() en el contador para limpiar espacios o saltos de lÃ­nea alrededor del nÃºmero.
+*/
+
+// Define que este archivo pertenece al paquete Tema1
+package Tema1
+
+// Importa la clase File de java.io para crear y gestionar el archivo temporal en el sistema de ficheros
+import java.io.File
+
+fun main() {
+
+    // ==========================================================
+    // PASO 1: Crear un archivo temporal
+    // ==========================================================
+
+    // Crea un fichero vacÃ­o en la carpeta temporal del sistema con prefijo "practica" y extensiÃ³n ".txt"
+    val archivoTemporal = File.createTempFile("practica",".txt")
+    println("Archivo temporal creado:")
+    // .absolutePath obtiene la ruta completa en texto (ej. /tmp/practica12345.txt) para pasÃ¡rsela luego a bash
+    println(archivoTemporal.absolutePath)
+    println()
+
+    // ==========================================================
+    // PASO 2: Escribir contenido usando printf desde bash
+    // ==========================================================
+    // printf enviarÃ¡ varias lÃ­neas al archivo temporal.
+    //
+    // > redirige la salida al archivo.
+    //
+    // Lanzamos bash ejecutando printf con 4 saltos de lÃ­nea (\n) y redirigiendo (>) el resultado al fichero temporal
+    val escribir = ProcessBuilder(
+        "bash",
+        "-c",
+        "printf 'LÃ­nea 1\nLÃ­nea 2\nLÃ­nea 3\nLÃ­nea 4\n' > ${archivoTemporal.absolutePath}"
+    ).start()
+
+    // Bloqueamos el programa padre hasta que el proceso 'escribir' haya volcado los datos y cerrado el archivo
+    escribir.waitFor()
+
+    // ==========================================================
+    // PASO 3: Contar lÃ­neas usando wc -l
+    // ==========================================================
+    // Lanzamos el comando 'wc -l' (word count, opciÃ³n -l para contar lÃ­neas) inyectÃ¡ndole el archivo por stdin con '<'
+    val contar = ProcessBuilder(
+        "bash",
+        "-c",
+        "wc -l < ${archivoTemporal.absolutePath}"
+    ).start()
+
+    // Leemos toda la salida de 'wc -l' como un Ãºnico String con readText() y eliminamos espacios/saltos de lÃ­nea con trim()
+    val numeroLineas = contar.inputStream
+        .bufferedReader()
+        .readText()
+        .trim()
+
+    // Esperamos a que el proceso 'contar' finalice completamente
+    contar.waitFor()
+
+    // Mostramos el total de lÃ­neas contadas (debe mostrar 4)
+    println("NÃºmero de lÃ­neas: $numeroLineas")
+    println()
+
+    // ==========================================================
+    // PASO 4: Leer contenido usando cat
+    // ==========================================================
+    // Lanzamos el comando 'cat' pasÃ¡ndole la ruta del archivo temporal para que vuelque su contenido por stdout
+    val leer = ProcessBuilder(
+        "bash",
+        "-c",
+        "cat ${archivoTemporal.absolutePath}"
+    ).start()
+
+    // Capturamos todo el texto devuelto por 'cat' en la variable 'contenido'
+    val contenido = leer.inputStream
+        .bufferedReader()
+        .readText()
+
+    // Esperamos a que el proceso 'leer' termine
+    leer.waitFor()
+
+    // ==========================================================
+    // PASO 5: Mostrar contenido
+    // ==========================================================
+    println("Contenido del archivo:")
+    println("----------------------")
+    println(contenido)
+
+    // ==========================================================
+    // PASO 6: Eliminar archivo temporal
+    // ==========================================================
+    // Programa el borrado automÃ¡tico del fichero temporal justo cuando la mÃ¡quina virtual (JVM) finalice
+    archivoTemporal.deleteOnExit()
+}
+
+=== ARCHIVO: BloqueoDeFicheros.kt ===
+/*
+Este archivo muestra cÃ³mo sincronizar varios procesos independientes que intentan escribir
+en un mismo archivo compartido (registro_compartido.txt) utilizando bloqueos de fichero
+a nivel de Sistema Operativo mediante FileChannel y FileLock (API Java NIO).
+*/
+
+/*
+Puntos clave para estudio de BloqueoDeFicheros.kt:
+
+* Â¿Por quÃ© usar FileChannel.lock() en lugar de ReentrantLock o @Synchronized?
+    ReentrantLock, Semaphore o @Synchronized solo sincronizan HILOS dentro de una misma JVM (un Ãºnico proceso).
+    Si lanzamos dos programas independientes (dos procesos con distinta JVM) que escriben a la vez en el mismo fichero, necesitamos un mecanismo a nivel de Sistema Operativo: FileChannel.lock().
+
+* Opciones de apertura (StandardOpenOption):
+    - CREATE: Crea el fichero si aÃºn no existe.
+    - WRITE: Abre el canal con permisos de escritura.
+    - APPEND: Garantiza que cada escritura se sitÃºe al final del archivo sin machacar lo anterior.
+
+* GestiÃ³n automÃ¡tica de recursos con .use { ... } en Kotlin:
+    La funciÃ³n .use { ... } es el equivalente en Kotlin al try-with-resources de Java.
+    Se aplica tanto al FileChannel como al FileLock devuelto por canal.lock().
+    Garantiza que, al terminar el bloque (o incluso si ocurre una excepciÃ³n en medio de la escritura), el cerrojo (FileLock) se libere automÃ¡ticamente y el canal se cierre, evitando dejar el archivo bloqueado permanentemente.
+*/
+
+// Define que este archivo pertenece al paquete Tema1
+package Tema1
+
+// Importa FileChannel (Java NIO) para operar con canales de ficheros que soportan bloqueo y mapeo en memoria
+import java.nio.channels.FileChannel
+// Importa Path para representar rutas del sistema de archivos de forma moderna (NIO.2)
+import java.nio.file.Path
+// Importa todas las constantes de StandardOpenOption (CREATE, WRITE, APPEND, READ...)
+import java.nio.file.StandardOpenOption.*
+
+fun main() {
+    // Obtiene el identificador de proceso (PID) del proceso actual en el sistema operativo para distinguirlo en el log
+    val pid = ProcessHandle.current().pid()
+
+    // Define la ruta relativa hacia el archivo de texto que compartirÃ¡n los procesos
+    val fichero = Path.of("src/Tema1/registro_compartido.txt")
+
+    // Abre el canal sobre el fichero (creÃ¡ndolo si no existe, en modo escritura y aÃ±adiendo al final).
+    // El bloque .use { canal -> ... } cerrarÃ¡ el FileChannel automÃ¡ticamente al finalizar.
+    FileChannel.open(fichero, CREATE, WRITE, APPEND).use { canal ->
+        println("[$pid] Esperando el bloqueo del fichero...")
+
+        // canal.lock() solicita al Sistema Operativo un bloqueo exclusivo sobre todo el archivo.
+        // Si otro proceso tiene el bloqueo en este instante, esta llamada detiene (bloquea) al proceso actual hasta que el otro lo suelte.
+        // El segundo .use { ... } asegura que el objeto FileLock se cierre (liberando el bloqueo) al salir de las llaves.
+        canal.lock().use { // Bloquea hasta que ningÃºn otro proceso tenga el lock
+            println("[$pid] Bloqueo obtenido, escribiendo...")
+
+            // En Java NIO, FileChannel no escribe Strings directamente, sino objetos ByteBuffer.
+            // Convertimos el String a un array de bytes (.toByteArray()) y lo envolvemos con ByteBuffer.wrap(...) para escribirlo.
+            canal.write(java.nio.ByteBuffer.wrap("LÃ­nea escrita por el proceso $pid\n".toByteArray()))
+
+            // Pausa de 3 segundos mientras mantenemos el bloqueo retenido.
+            // Esto permite ejecutar una segunda instancia del programa desde el IDE al mismo tiempo y comprobar cÃ³mo la segunda espera.
+            Thread.sleep(3000) // Simula una escritura larga
+        } // El bloqueo se libera al salir del bloque
+
+        println("[$pid] Bloqueo liberado")
+    }
+}
+
+=== ARCHIVO: EjecucionScripts.kt ===
+/*
+Este archivo proporciona una plantilla completa y robusta para ejecutar scripts externos (.sh, .bat, .py),
+configurando su directorio de trabajo, unificando la salida de errores, leyendo la salida con el bucle
+clÃ¡sico de lectura en Kotlin y gestionando posibles excepciones con try-catch.
+*/
+
+/*
+Puntos clave para estudio de EjecucionScripts.kt:
+
+* ConfiguraciÃ³n previa al .start() en ProcessBuilder:
+    1. Paso de parÃ¡metros al script: Se pasan como argumentos separados en el constructor: ProcessBuilder("ruta/script.sh", "arg1", "arg2"). Dentro del script bash se recibirÃ¡n como $1 y $2.
+    2. .directory(File("...")): Cambia el directorio de trabajo (working directory) en el que se ejecutarÃ¡ el proceso hijo. Si no se especifica, el hijo hereda el directorio de trabajo del proceso padre (normalmente la raÃ­z del proyecto en IntelliJ).
+    3. .redirectErrorStream(true): Hace que tanto la salida normal (stdout) como los errores (stderr) del script viajen juntos por process.inputStream.
+
+* ExplicaciÃ³n de la expresiÃ³n idiomÃ¡tica while (reader.readLine().also { line = it } != null):
+    En Java se suele escribir: while ((line = reader.readLine()) != null).
+    En Kotlin, la asignaciÃ³n '=' no devuelve un valor (no es una expresiÃ³n), por lo que no puede meterse directamente dentro de la condiciÃ³n del while.
+    Por eso se usa .also { line = it }:
+    1. reader.readLine() lee una lÃ­nea del proceso (o devuelve null si el proceso ya terminÃ³ y cerrÃ³ el flujo).
+    2. .also { line = it } guarda ese valor leÃ­do ('it') en la variable 'line' y devuelve el mismo valor original.
+    3. Se compara con '!= null': si habÃ­a lÃ­nea, entra al bucle y la imprime; si era null (fin del flujo), sale del bucle.
+*/
+
+// Define que este archivo pertenece al paquete Tema1
+package Tema1
+
+// Importaciones para manejo de directorios (File), lectura de flujos (InputStreamReader, BufferedReader) y creaciÃ³n de procesos
+import java.io.File
+import java.io.InputStreamReader
+import java.io.BufferedReader
+import java.lang.ProcessBuilder
+
+
+fun main() {
+    // Crear un proceso para ejecutar un script externo indicando su ruta
+    val processBuilder = ProcessBuilder("path/to/your/script.sh")
+    /*
+    Comentario original del profesor:
+    Si queremos pasar algo como parÃ¡metro al script:
+        val processBuilder = ProcessBuilder("path/to/your/script.sh", "arg1", "arg2")
+     */
+    // Establece la carpeta desde la cual se ejecutarÃ¡ el script (afecta a las rutas relativas que use el script por dentro)
+    processBuilder.directory(File("/path/to/your/script/directory")) // Establecer el directorio de trabajo
+
+    // Une el canal de errores (stderr) con el canal de salida estÃ¡ndar (stdout)
+    processBuilder.redirectErrorStream(true) // Redirigir errores al flujo de salida
+
+    // Bloque try-catch para capturar errores (por ejemplo, IOException si el script no existe o no tiene permisos de ejecuciÃ³n +x)
+    try {
+        // Arranca el script en el sistema operativo
+        val process = processBuilder.start() // Iniciar el proceso
+
+        // Crea el lector con buffer conectado a la salida del proceso hijo
+        val reader = BufferedReader(InputStreamReader(process.inputStream))
+
+        // Variable nullable donde iremos guardando cada lÃ­nea leÃ­da
+        var line: String?
+
+        // Lee lÃ­nea a lÃ­nea del proceso, la asigna a 'line' mediante .also y repite mientras no llegue al final del flujo (null)
+        while (reader.readLine().also { line = it } != null) {
+            println(line)
+        }
+
+        // Bloquea hasta que el script finalice por completo y guarda su cÃ³digo de retorno (0 = Ã©xito)
+        val exitCode = process.waitFor()
+        println("Proceso terminado con cÃ³digo de salida: $exitCode")
+    } catch (e: Exception) {
+        // Imprime la traza del error por consola si fallÃ³ el arranque o la ejecuciÃ³n del proceso
+        e.printStackTrace()
+    }
+}
+
+=== ARCHIVO: EscritorMemoriaCompartida.kt ===
+/*
+Este archivo implementa el lado "Escritor" de un sistema de ComunicaciÃ³n Entre Procesos (IPC)
+basado en Memoria Compartida (Shared Memory), proyectando un archivo en la memoria RAM
+mediante MappedByteBuffer (canal.map).
+*/
+
+/*
+Puntos clave para estudio de EscritorMemoriaCompartida.kt:
+
+* Â¿QuÃ© es un archivo mapeado en memoria (Memory-Mapped File / MappedByteBuffer)?
+    Mediante canal.map(FileChannel.MapMode.READ_WRITE, 0, 1024), el Sistema Operativo reserva una regiÃ³n de 1024 bytes de memoria RAM virtual directamente vinculada al fichero "memoria_compartida.dat".
+    Cuando varios procesos mapean el mismo archivo, comparten directamente esas mismas pÃ¡ginas de memoria RAM fÃ­sica. Es el mecanismo de IPC mÃ¡s rÃ¡pido porque evita copiar datos continuamente entre el espacio de usuario y el kernel.
+
+* Permisos obligatorios en FileChannel.open para MapMode.READ_WRITE:
+    Para poder mapear en modo READ_WRITE, es OBLIGATORIO abrir el FileChannel incluyendo tanto READ como WRITE (ademÃ¡s de CREATE por si el archivo aÃºn no existe). Si solo pusiÃ©ramos WRITE, canal.map() lanzarÃ­a una NonReadableChannelException.
+
+* DiseÃ±o del protocolo de datos en el buffer (Offset 0 y Offset 4):
+    Como la zona de memoria mide siempre 1024 bytes fijos, el proceso lector necesita saber cuÃ¡ntos bytes reales ocupa nuestro mensaje para no leer basura o bytes vacÃ­os (ceros) hasta el byte 1024:
+    - PosiciÃ³n (offset) 0: Escribimos un entero (Int) con la longitud del mensaje (memoria.putInt(0, mensaje.size)). Como un Int en Java/Kotlin ocupa exactamente 4 bytes (32 bits), ocupa las posiciones 0, 1, 2 y 3.
+    - PosiciÃ³n (offset) 4: Justo a continuaciÃ³n del Int (en el byte Ã­ndice 4), escribimos los bytes del texto (memoria.put(4, mensaje)).
+*/
+
+// Define que este archivo pertenece al paquete Tema1
+package Tema1
+
+// Importaciones de Java NIO para canales de fichero, rutas y opciones de apertura
+import java.nio.channels.FileChannel
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.StandardOpenOption.*
+
+fun main() {
+    // Ruta del archivo binario que servirÃ¡ de soporte para la memoria compartida entre procesos
+    val fichero = Path.of("src/Tema1/memoria_compartida.dat")
+
+    // Abre el canal con permisos de creaciÃ³n, lectura y escritura, cerrÃ¡ndolo automÃ¡ticamente al salir del bloque .use
+    FileChannel.open(fichero, CREATE, READ, WRITE).use { canal ->
+        // Mapear 1024 bytes del fichero en memoria (desde el byte 0 hasta el 1024) en modo Lectura/Escritura.
+        // Devuelve un objeto MappedByteBuffer llamado 'memoria'.
+        val memoria = canal.map(FileChannel.MapMode.READ_WRITE, 0, 1024)
+
+        // Convierte el String del mensaje en un array de bytes (en codificaciÃ³n UTF-8 por defecto)
+        val mensaje = "Hola desde la memoria compartida".toByteArray()
+
+        // Escribe en los primeros 4 bytes (Ã­ndices 0, 1, 2 y 3) el nÃºmero de bytes que mide el mensaje
+        memoria.putInt(0, mensaje.size)     // Primero la longitud del mensaje
+
+        // Escribe a partir del byte Ã­ndice 4 el contenido real del array de bytes del mensaje
+        memoria.put(4, mensaje)             // DespuÃ©s el contenido
+
+        println("Mensaje escrito en la memoria compartida")
+    }
+}
+
+=== ARCHIVO: LectorMemoriaCompartida.kt ===
+/*
+Este archivo implementa el lado "Lector" del sistema de Memoria Compartida (pareja de EscritorMemoriaCompartida.kt).
+Accede a la misma regiÃ³n de 1024 bytes en modo de solo lectura (READ_ONLY), recupera primero el tamaÃ±o
+del mensaje en los primeros 4 bytes y luego extrae exactamente los bytes del texto.
+*/
+
+/*
+Puntos clave para estudio de LectorMemoriaCompartida.kt:
+
+* Apertura en modo solo lectura (READ y MapMode.READ_ONLY):
+    Como este proceso Ãºnicamente necesita consultar los datos escritos por el escritor, abre el FileChannel solo con StandardOpenOption.READ y mapea la regiÃ³n con FileChannel.MapMode.READ_ONLY. Si intentara llamar a memoria.put(...) lanzarÃ­a una ReadOnlyBufferException.
+
+* DescodificaciÃ³n siguiendo el mismo protocolo binario:
+    1. memoria.getInt(0): Lee los 4 primeros bytes (posiciones 0..3) y los interpreta como un Int que indica la longitud exacta del mensaje en bytes.
+    2. ByteArray(longitud): Crea un array de bytes en memoria del tamaÃ±o exacto que indicÃ³ la cabecera.
+    3. memoria.get(4, bytes): Copia desde el Ã­ndice 4 de la memoria compartida tantos bytes como caben en nuestro array 'bytes'.
+    4. String(bytes): Convierte los bytes leÃ­dos de nuevo a un String legible en UTF-8.
+*/
+
+// Define que este archivo pertenece al paquete Tema1
+package Tema1
+
+// Importaciones de Java NIO para abrir el canal y mapear el archivo en modo lectura
+import java.nio.channels.FileChannel
+import java.nio.file.Path
+import java.nio.file.StandardOpenOption.READ
+
+fun main() {
+    // Apunta exactamente al mismo fichero que utilizÃ³ el proceso EscritorMemoriaCompartida
+    val fichero = Path.of("src/Tema1/memoria_compartida.dat")
+
+    // Abre el canal Ãºnicamente con permiso de lectura (READ) y garantiza su cierre al terminar con .use
+    FileChannel.open(fichero, READ).use { canal ->
+        // Mapea en memoria RAM la misma regiÃ³n de 1024 bytes (desde la posiciÃ³n 0) en modo solo lectura
+        val memoria = canal.map(FileChannel.MapMode.READ_ONLY, 0, 1024)
+
+        // Lee el entero (4 bytes) guardado en la posiciÃ³n 0 para saber cuÃ¡ntos bytes mide el mensaje escrito
+        val longitud = memoria.getInt(0)
+
+        // Reserva un array de bytes con el tamaÃ±o exacto del mensaje
+        val bytes = ByteArray(longitud)
+
+        // Extrae los bytes del mensaje empezando en la posiciÃ³n 4 (justo despuÃ©s de los 4 bytes del Int de longitud)
+        memoria.get(4, bytes)
+
+        // Convierte el ByteArray a String e imprime el mensaje recuperado por consola
+        println("LeÃ­do de la memoria compartida: ${String(bytes)}")
+    }
+}
+
+=== ARCHIVO: Logging.kt ===
+/*
+Este archivo introduce el registro de eventos (Logging) seguro en entornos concurrentes
+mediante la API estÃ¡ndar java.util.logging, escribiendo las trazas de mÃºltiples hilos
+en un fichero compartido (app.log).
+*/
+
+/*
+Puntos clave para estudio de Logging.kt:
+
+- Â¿Por quÃ© usar Logger en lugar de println() o escribir directamente con File.appendText()?
+    1. Thread-Safety (Seguridad entre hilos): Las clases Logger y FileHandler estÃ¡n sincronizadas internamente. Si 5 hilos intentan registrar un evento a la vez, las lÃ­neas no se mezclan ni se corrompen en el archivo.
+    2. Persistencia y auditorÃ­a: Lo que se imprime con println() se pierde al cerrar la consola; el FileHandler deja un historial con fecha, hora, nivel de gravedad (INFO, WARNING, SEVERE) y mÃ©todo de origen.
+
+- Detalle importante de examen sobre Formateadores (Formatter):
+    Por defecto, un FileHandler escribe los logs en formato XML (XMLFormatter).
+    Por eso es imprescindible asignarle un SimpleFormatter() si queremos leer el archivo app.log como texto plano legible.
+*/
+
+// Define que este archivo pertenece al paquete Tema1
+package Tema1
+
+// Importa FileHandler: manejador que redirige los mensajes del Logger hacia un archivo fÃ­sico en disco
+import java.util.logging.FileHandler
+// Importa Logger: clase principal encargada de capturar y categorizar los mensajes de registro
+import java.util.logging.Logger
+// Importa SimpleFormatter: formatea los registros de log como texto plano legible en lugar de XML
+import java.util.logging.SimpleFormatter
+// Importa la funciÃ³n helper thread {} de Kotlin para crear e iniciar hilos de forma concisa
+import kotlin.concurrent.thread
+
+fun main() {
+    // Obtiene (o crea si no existe) una instancia de Logger identificada con el nombre "MyLogger"
+    val logger = Logger.getLogger("MyLogger")
+
+    // Crea un manejador de fichero que escribirÃ¡ en "app.log" (en la raÃ­z del proyecto).
+    // El segundo parÃ¡metro 'true' (append) indica que NO sobrescriba el fichero al arrancar, sino que aÃ±ada al final.
+    val fileHandler = FileHandler("app.log", true)
+
+    // Cambia el formateador por defecto (que serÃ­a XMLFormatter) a SimpleFormatter (texto plano con fecha, nivel y mensaje)
+    fileHandler.formatter = SimpleFormatter()
+
+    // Conecta el manejador de archivo al logger (a partir de ahora, los mensajes saldrÃ¡n por consola y tambiÃ©n se guardarÃ¡n en app.log)
+    logger.addHandler(fileHandler)
+
+    // Comentario original de la profesora:
+    // SimulaciÃ³n de procesos concurrentes
+    // Bucle que se repite 5 veces (con 'i' tomando valores del 0 al 4) para lanzar 5 hilos en paralelo
+    repeat(5) { i ->
+        // Crea e inicia inmediatamente un nuevo hilo de ejecuciÃ³n
+        thread {
+            // Registra un mensaje con nivel informativo (Level.INFO) indicando que el hilo 'i' ha comenzado
+            logger.info("Iniciando proceso $i")
+
+            // Pausa el hilo actual durante un tiempo aleatorio entre 1000 ms (1 seg) y 3000 ms (3 seg) para simular carga de trabajo
+            Thread.sleep((1000..3000).random().toLong())
+
+            // Registra el evento de finalizaciÃ³n; como el tiempo es aleatorio, terminarÃ¡n en un orden distinto al que empezaron
+            logger.info("Finalizando proceso $i")
+        }
+    }
+}
+
+=== ARCHIVO: Monitores.kt ===
+/*
+Este archivo implementa el patrÃ³n de diseÃ±o de concurrencia "Monitor" utilizando
+ReentrantLock y variables de condiciÃ³n (Condition) para coordinar tanto la exclusiÃ³n mutua
+como la espera activa/notificaciÃ³n entre hilos.
+*/
+
+/*
+Puntos clave para estudio de Monitores.kt:
+
+- Â¿QuÃ© diferencia a un Monitor de un simple Mutex?
+    Un Mutex solo impide que dos hilos entren a la vez (exclusiÃ³n mutua).
+    Un Monitor, ademÃ¡s de exclusiÃ³n mutua (ReentrantLock), encapsula el estado del recurso (recursoDisponible) y permite que un hilo que ya entrÃ³ pero no puede continuar se duerma liberando la llave temporalmente (condition.await()) y sea despertado cuando otro hilo cambie el estado (condition.signal()).
+
+- Pregunta clÃ¡sica de examen: Â¿Por quÃ© se usa `while (!recursoDisponible)` y NO `if (!recursoDisponible)` antes de `condition.await()`?
+    1. Despertares espurios (Spurious Wakeups): El sistema operativo puede despertar un hilo en espera sin que nadie haya llamado a signal().
+    2. Competencia entre varios hilos: Si otro hilo se cuela antes de que el hilo despertado recupere el lock, el recurso podrÃ­a volver a estar ocupado. El bucle `while` obliga a volver a comprobar la condiciÃ³n antes de seguir.
+*/
+
+// Define que este archivo pertenece al paquete Tema1
+package Tema1
+
+// Importa Condition: permite suspender hilos (await) y despertarlos (signal / signalAll) dentro de un ReentrantLock
+import java.util.concurrent.locks.Condition
+// Importa ReentrantLock: cerrojo de exclusiÃ³n mutua explÃ­cito mÃ¡s flexible que el bloque synchronized tradicional
+import java.util.concurrent.locks.ReentrantLock
+// Importa thread para crear hilos fÃ¡cilmente
+import kotlin.concurrent.thread
+// Importa la extensiÃ³n withLock, que adquiere el cerrojo al entrar al bloque y lo libera automÃ¡ticamente en un finally al salir
+import kotlin.concurrent.withLock
+
+/*
+Comentario original de la profesora:
+En este ejemplo, la clase Monitor encapsula un recurso compartido y
+ proporciona mÃ©todos para acceder a Ã©l de manera segura.
+ El primero que llama a accederRecurso() lo ocupa;
+ el segundo se queda esperando en condition.await()
+ (lo que libera temporalmente el lock)
+ hasta que el primero llama a liberarRecurso()
+ y le avisa con condition.signal().
+ */
+
+class Monitor {
+    // Cerrojo interno que garantiza que solo un hilo pueda ejecutar cÃ³digo dentro de accederRecurso o liberarRecurso a la vez
+    private val lock = ReentrantLock()
+    // Variable de condiciÃ³n asociada a este cerrojo para gestionar la cola de hilos dormidos esperando el recurso
+    private val condition: Condition = lock.newCondition()
+    // Variable de estado (predicado) que indica si el recurso estÃ¡ libre (true) u ocupado (false)
+    private var recursoDisponible = true // Al principio el recurso estÃ¡ libre
+
+    fun accederRecurso() {
+        // Adquiere el cerrojo antes de comprobar o modificar 'recursoDisponible'
+        lock.withLock {
+            // Mientras el recurso estÃ© ocupado por otro hilo, este hilo no puede avanzar
+            while (!recursoDisponible) {
+                // condition.await() hace 3 cosas de forma atÃ³mica:
+                // 1. Libera temporalmente el 'lock' para que el otro hilo pueda entrar a 'liberarRecurso()'.
+                // 2. Duerme al hilo actual hasta que alguien llame a condition.signal().
+                // 3. Antes de devolver el control, vuelve a adquirir el 'lock'.
+                condition.await()
+            }
+            // Cuando sale del while, tenemos el lock y sabemos seguro que el recurso estaba libre
+            println("Accediendo al recurso compartido")
+            // Marcamos el recurso como ocupado para que cualquier otro hilo que entre despuÃ©s tenga que esperar
+            recursoDisponible = false
+        } // Al salir de withLock, se libera el cerrojo fÃ­sico (pero recursoDisponible sigue en false)
+    }
+
+    fun liberarRecurso() {
+        // Adquiere el cerrojo para modificar el estado de forma segura
+        lock.withLock {
+            println("Liberando el recurso compartido")
+            // Cambia el estado de nuevo a libre
+            recursoDisponible = true
+            // Despierta a un hilo que estuviera dormido en condition.await() avisÃ¡ndole de que ya puede reintentar
+            condition.signal()
+        } // Libera el cerrojo para que el hilo reciÃ©n despertado pueda adquirirlo y salir de su await()
+    }
+}
+
+fun main() {
+    // Instancia Ãºnica del monitor que compartirÃ¡n ambos hilos
+    val monitor = Monitor()
+
+    // Crea una lista de 2 hilos que intentarÃ¡n usar el mismo monitor simultÃ¡neamente
+    val tareas = (1..2).map {
+        thread {
+            // Solicita permiso al monitor; el segundo hilo quedarÃ¡ bloqueado aquÃ­ hasta que el primero libere
+            monitor.accederRecurso()
+            // Simula durante 1 segundo que estÃ¡ utilizando el recurso exclusivo
+            Thread.sleep(1000)
+            // Devuelve el recurso y despierta al siguiente hilo en espera
+            monitor.liberarRecurso()
+        }
+    }
+    // El hilo principal (main) espera a que ambos hilos terminen su ejecuciÃ³n antes de finalizar el programa
+    tareas.forEach { it.join() }
+}
+
+=== ARCHIVO: Mutexes.kt ===
+/*
+Este archivo demuestra el uso directo de un Mutex (Mutual Exclusion / ExclusiÃ³n Mutua)
+mediante ReentrantLock para proteger una secciÃ³n crÃ­tica entre varios hilos.
+*/
+
+/*
+Puntos clave para estudio de Mutexes.kt:
+
+- Concepto de SecciÃ³n CrÃ­tica y Mutex:
+    La secciÃ³n crÃ­tica es el fragmento de cÃ³digo donde se accede a un recurso compartido (variables, ficheros, hardware).
+    El Mutex actÃºa como el cerrojo de una puerta con una Ãºnica llave: el primer hilo que llega cierra con llave y entra; el segundo se queda bloqueado en la puerta hasta que el primero sale y devuelve la llave.
+
+- Â¿Por quÃ© se llama ReentrantLock (Cerrojo Reentrante)?
+    Porque si un hilo que YA posee el cerrojo intenta volver a bloquearlo (por ejemplo, llamando a una funciÃ³n recursiva o a otro mÃ©todo protegido por el mismo lock), no se bloquea a sÃ­ mismo (evita un autodeadlock), sino que incrementa un contador interno de propietarios.
+
+- Ventaja de `lock.withLock { ... }` frente a `lock.lock()` y `lock.unlock()`:
+    Si usas `lock.lock()` manualmente y ocurre una excepciÃ³n dentro de la secciÃ³n crÃ­tica antes de llegar a `lock.unlock()`, el cerrojo jamÃ¡s se libera y todos los demÃ¡s hilos quedan colgados para siempre. `withLock` mete automÃ¡ticamente el `unlock()` dentro de un bloque `finally`.
+*/
+
+// Define que este archivo pertenece al paquete Tema1
+package Tema1
+
+// Importa ReentrantLock: implementaciÃ³n estÃ¡ndar de un Mutex en el paquete java.util.concurrent.locks
+import java.util.concurrent.locks.ReentrantLock
+// Importa la funciÃ³n thread para lanzar hilos concurrentes
+import kotlin.concurrent.thread
+// Importa la funciÃ³n de extensiÃ³n withLock para gestionar la adquisiciÃ³n y liberaciÃ³n segura del cerrojo
+import kotlin.concurrent.withLock
+
+fun main() {
+    // Instancia Ãºnica del cerrojo (Mutex) que deben compartir todos los hilos que quieran sincronizarse
+    val lock = ReentrantLock()
+
+    // Recorre el rango del 1 al 2 creando dos hilos concurrentes e identificÃ¡ndolos con 'id' (1 y 2)
+    val tareas = (1..2).map { id ->
+        thread {
+            // Comentario original de la profesora:
+            // withLock bloquea el mutex y lo desbloquea al salir del bloque
+            lock.withLock {
+                // --- INICIO DE LA SECCIÃ“N CRÃTICA ---
+                // Solo un hilo puede estar ejecutando estas tres lÃ­neas en un instante dado
+                println("Proceso $id: Accediendo al recurso compartido")
+                // El hilo retiene el cerrojo durante 1 segundo; el otro hilo estÃ¡ pausado esperando en lock.withLock
+                Thread.sleep(1000)
+                println("Proceso $id: Liberando el recurso compartido")
+                // --- FIN DE LA SECCIÃ“N CRÃTICA ---
+            } // AquÃ­ se ejecuta internamente lock.unlock() dentro de un bloque finally, cediendo el paso al otro hilo
+        }
+    }
+    // Espera a que los dos hilos hayan terminado antes de cerrar el hilo main
+    tareas.forEach { it.join() }
+}
+
+=== ARCHIVO: Pipes.kt ===
+/*
+Este archivo muestra cÃ³mo comunicarse bidireccionalmente desde el proceso padre (Kotlin)
+con un subproceso hijo (grep) a travÃ©s de tuberÃ­as anÃ³nimas (pipes), enviÃ¡ndole datos
+por su entrada estÃ¡ndar (outputStream) y recogiendo el resultado filtrado por su salida estÃ¡ndar (inputStream).
+*/
+
+/*
+Puntos clave para estudio de Pipes.kt:
+
+- El flujo completo de datos Padre <-> Hijo:
+    1. Padre escribe en `process.outputStream` -> entra por el `stdin` de `grep`.
+    2. `grep` filtra solo las lÃ­neas que contienen la palabra "kotlin".
+    3. `grep` escribe el resultado en su `stdout` -> el Padre lo lee desde `process.inputStream`.
+
+- ERROR TÃPICO DE EXAMEN (Bloqueo infinito por no cerrar outputStream):
+    Comandos como `grep`, `cat`, `sort` o `wc` leen de su entrada estÃ¡ndar hasta que encuentran la marca de fin de fichero (EOF).
+    Si olvidas hacer `writer.close()`, la tuberÃ­a de entrada queda abierta, `grep` se queda esperando eternamente a que le envÃ­es mÃ¡s lÃ­neas, y tu bucle de lectura se cuelga para siempre.
+
+- Sintaxis idiomÃ¡tica de lectura en Kotlin: `while (reader.readLine().also { line = it } != null)`:
+    En Java se escribe `while ((line = reader.readLine()) != null)`. En Kotlin las asignaciones (`=`) no devuelven ningÃºn valor, por lo que se usa `.also { line = it }` para guardar la lÃ­nea leÃ­da en la variable `line` al mismo tiempo que se comprueba si el resultado de `readLine()` fue `null` (fin del flujo).
+*/
+
+// Define que este archivo pertenece al paquete Tema1
+package Tema1
+
+// Importa BufferedReader para leer texto lÃ­nea a lÃ­nea desde la salida del proceso hijo
+import java.io.BufferedReader
+// Importa InputStreamReader para convertir los bytes que salen del hijo en caracteres
+import java.io.InputStreamReader
+// Importa OutputStreamWriter para convertir nuestros Strings de Kotlin en bytes que enviar a la entrada del hijo
+import java.io.OutputStreamWriter
+// Importa ProcessBuilder para configurar y lanzar el proceso del sistema operativo
+import java.lang.ProcessBuilder
+
+fun main() {
+    // Comentario original de la profesora:
+    // Crear un proceso para ejecutar el comando 'grep "kotlin"'
+    // Como no se le indica ningÃºn archivo a grep, este se queda escuchando por su entrada estÃ¡ndar (stdin)
+    val processBuilder = ProcessBuilder("bash", "-c","grep kotlin")
+    val process = processBuilder.start()
+
+    // Comentario original de la profesora:
+    // Escribir en el pipe de entrada del proceso
+    // Conectamos un OutputStreamWriter al process.outputStream (que es el stdin del proceso grep)
+    val writer = OutputStreamWriter(process.outputStream)
+    // Enviamos la primera lÃ­nea (contiene la palabra "kotlin", por lo que grep la dejarÃ¡ pasar)
+    writer.write("kotlin es un lenguaje de programaciÃ³n\n")
+    // Enviamos la segunda lÃ­nea (no contiene "kotlin", por lo que grep la descartarÃ¡)
+    writer.write("java es otro lenguaje de programaciÃ³n\n")
+    // VacÃ­a el buffer forzando que los datos salgan inmediatamente hacia el proceso hijo
+    writer.flush()
+    // CRÃTICO: Cierra la tuberÃ­a de entrada enviando EOF a grep para indicarle que ya hemos terminado de enviarle texto
+    writer.close()
+
+    // Comentario original de la profesora:
+    // Leer la salida del proceso
+    // Conectamos un BufferedReader al process.inputStream (que es el stdout del proceso grep)
+    val reader = BufferedReader(InputStreamReader(process.inputStream))
+    var line: String?
+    // Lee cada lÃ­nea filtrada por grep, la guarda en 'line' mediante .also y sigue mientras no sea null (EOF)
+    while (reader.readLine().also { line = it } != null) {
+        // Solo imprimirÃ¡: "kotlin es un lenguaje de programaciÃ³n"
+        println(line)
+    }
+
+    // Comentario original de la profesora:
+    // Esperar a que el proceso termine
+    // Bloquea al padre hasta que grep finalice y recoge su cÃ³digo de retorno (0 = encontrÃ³ al menos una coincidencia)
+    val exitCode = process.waitFor()
+    println("Proceso terminado con cÃ³digo de salida: $exitCode")
+}
+
+=== ARCHIVO: PrimerPlano.kt ===
+/*
+Este archivo demuestra la ejecuciÃ³n de un subproceso en primer plano (foreground)
+utilizando inheritIO() para conectar directamente los flujos de entrada, salida y error
+del hijo con la consola del proceso padre en tiempo real.
+*/
+
+/*
+Puntos clave para estudio de PrimerPlano.kt:
+
+- Â¿QuÃ© hace exactamente .inheritIO()?
+    Por defecto, ProcessBuilder redirige stdin, stdout y stderr del hijo a tuberÃ­as internas (pipes) que debemos leer manualmente con BufferedReader.
+    Al llamar a .inheritIO(), el proceso hijo hereda la misma consola que nuestra aplicaciÃ³n Kotlin.
+    Ventaja: No hace falta crear ningÃºn BufferedReader y la salida (como cada respuesta de ping segundo a segundo) se ve en pantalla en tiempo real.
+    Desventaja: Nuestro programa Kotlin no puede guardar ni procesar en variables el texto que imprime el hijo, porque va directo a la pantalla.
+
+- Â¿QuÃ© significa ejecutar en "Primer Plano" (Foreground)?
+    Significa que el proceso padre lanza al hijo y se queda bloqueado en process.waitFor() esperando a que el hijo termine antes de continuar con sus propias instrucciones.
+*/
+
+// Define que este archivo pertenece al paquete Tema1
+package Tema1
+
+fun main() {
+    // Configura e inicia el comando 'ping -c 3 localhost' dentro de bash:
+    // - "ping": Herramienta de red que envÃ­a paquetes ICMP Echo Request para comprobar la conectividad.
+    // - "-c 3": En Linux/bash indica "count 3" (envÃ­a exactamente 3 paquetes y termina; en Windows serÃ­a "-n 3", porque sin lÃ­mite en Linux el ping es infinito).
+    // - "localhost": Apunta a nuestra propia mÃ¡quina (127.0.0.1).
+    val process = ProcessBuilder("bash","-c", "ping -c 3 localhost")
+        // Comentario original de la profesora:
+        .inheritIO() // El hijo escribe directamente en la consola del padre
+        // Arranca el proceso hijo en el sistema operativo
+        .start()
+
+    // Comentario original de la profesora (soluciÃ³n a un error frecuente en WSL):
+    // Si da fallo en Windows en Socket: Entrar en WSL y poner:
+    // getcap $(which ping)
+    // sudo setcap cap_net_raw+ep /usr/bin/ping
+    // (ExplicaciÃ³n: 'ping' necesita permisos especiales de red 'cap_net_raw' para abrir sockets crudos ICMP sin ser usuario root).
+
+    // process.pid(): Devuelve un Long con el identificador Ãºnico del proceso (Process ID) asignado por el Sistema Operativo
+    println("Proceso iniciado con PID: ${process.pid()}")
+
+    // Comentario original de la profesora:
+    // El padre se bloquea hasta que el hijo termine
+    // Como tarda unos 3 segundos en hacer los 3 pings, el hilo main se detiene aquÃ­ hasta que ping finaliza y devuelve su cÃ³digo (0 = Ã©xito)
+    val exitCode = process.waitFor()
+    println("Proceso terminado con cÃ³digo de salida: $exitCode")
+}
+
+=== ARCHIVO: Process.kt ===
+/*
+Este archivo muestra la plantilla completa y robusta para lanzar un proceso con ProcessBuilder,
+configurando su directorio de trabajo (.directory), unificando sus canales de salida y error
+(.redirectErrorStream), capturando excepciones y esperando su cÃ³digo de retorno.
+*/
+
+/*
+Puntos clave para estudio de Process.kt:
+
+- ConfiguraciÃ³n del directorio de trabajo con .directory(File("ruta")):
+    Si no se especifica, el proceso hijo se ejecuta en la carpeta raÃ­z del proyecto de IntelliJ.
+    Con .directory(File(...)), cambiamos la carpeta actual (working directory) exclusivamente para ese proceso hijo sin necesidad de usar el comando 'cd' dentro de bash.
+
+- Por quÃ© usar redirectErrorStream(true) con un Ãºnico BufferedReader:
+    Al ponerlo a 'true', cualquier mensaje de error que el comando escriba en stderr se redirige automÃ¡ticamente a stdout (process.inputStream).
+    AsÃ­ nos ahorramos crear un segundo BufferedReader para process.errorStream y leemos tanto aciertos como fallos con un solo bucle while.
+*/
+
+// Define que este archivo pertenece al paquete Tema1
+package Tema1
+
+// Importa BufferedReader para leer la salida del subproceso lÃ­nea por lÃ­nea
+import java.io.BufferedReader
+// Importa File para representar la ruta del directorio de trabajo en el sistema de archivos
+import java.io.File
+// Importa InputStreamReader para convertir los bytes del flujo de salida en caracteres
+import java.io.InputStreamReader
+
+fun main(){
+    // Prepara el comando 'ls -l' (listado detallado de archivos) para ser ejecutado por bash (aÃºn NO lo inicia)
+    val processBuilder = ProcessBuilder("bash","-c","ls -l")
+
+    // Comentario original de la profesora:
+    // Establecer el directorio de trabajo
+    // Indica que el comando 'ls -l' debe listar los archivos de esta ruta concreta y no la raÃ­z del proyecto.
+    // Nota: En cadenas de Kotlin, las barras invertidas de Windows deben escaparse como doble barra (\\).
+    processBuilder.directory(File("C:\\Users\\Usuario\\Desktop\\2DAM-AS-2627\\Kotlin_Practicas\\src\\Tema1"))
+
+    // Comentario original de la profesora:
+    // Redirigir errores al flujo de salida
+    // Fusiona stderr dentro de stdout para leer ambos canales desde process.inputStream
+    processBuilder.redirectErrorStream(true)
+
+    // Bloque try-catch para capturar posibles fallos al arrancar el proceso (ej. si la ruta del directorio no existe en nuestro PC, lanza IOException)
+    try {
+
+        // Comentario original de la profesora:
+        // Iniciamos el proceso, start devuelve un objeto Process
+        val process = processBuilder.start()
+
+        // Comentario original de la profesora:
+        // Leer la salida del proceso
+        val reader = BufferedReader(InputStreamReader(process.inputStream))
+        var line:String?
+        // Bucle clÃ¡sico de lectura: lee una lÃ­nea, la asigna a 'line' mediante .also y repite mientras no llegue al final del flujo (null)
+        while(reader.readLine().also {line = it}!= null){
+            println(line)
+        }
+
+        // Comentario original de la profesora:
+        // Esperar a que el proceso finalice
+        // Recoge el cÃ³digo de salida del proceso (0 si 'ls -l' funcionÃ³ correctamente)
+        val exitCode = process.waitFor()
+        println("Proceso terminado: $exitCode")
+    }catch(e: Exception){
+        // Si ocurre una excepciÃ³n (por ejemplo, que la carpeta C:\Users\Usuario\... no exista en tu mÃ¡quina), imprime la traza del error
+        e.printStackTrace()
+    }
+}
+
+=== ARCHIVO: ProcessGrep.kt ===
+/*
+Este archivo aplica la plantilla completa de ProcessBuilder para ejecutar el comando 'grep'
+buscando una cadena de texto directamente sobre un fichero ubicado en un directorio especÃ­fico.
+*/
+
+/*
+Puntos clave para estudio de ProcessGrep.kt:
+
+- Dos formas de usar 'grep' vistas en el tema:
+    1. En Pipes.kt: EjecutÃ¡bamos `grep kotlin` sin indicar archivo; grep leÃ­a de su entrada estÃ¡ndar (stdin) lo que Kotlin le enviaba por process.outputStream.
+    2. En ProcessGrep.kt: Ejecutamos `grep cadena_a_buscar archivo.txt`; grep abre directamente `archivo.txt` dentro del directorio configurado con `.directory(...)` y no espera nada por stdin.
+
+- CÃ³digos de salida (exitCode) importantes de 'grep' para examen:
+    - 0: EncontrÃ³ al menos una lÃ­nea con la palabra buscada.
+    - 1: El archivo existe y se leyÃ³ bien, pero NO encontrÃ³ ninguna coincidencia.
+    - 2: OcurriÃ³ un error (por ejemplo, `archivo.txt` no existe en ese directorio). Como tenemos `redirectErrorStream(true)`, veremos el mensaje `grep: archivo.txt: No such file or directory` impreso por el bucle while.
+*/
+
+// Define que este archivo pertenece al paquete Tema1
+package Tema1
+
+// Importaciones para manejo de rutas (File), flujos de lectura (InputStreamReader, BufferedReader) y creaciÃ³n de procesos
+import java.io.File
+import java.io.InputStreamReader
+import java.io.BufferedReader
+import java.lang.ProcessBuilder
+// ImportaciÃ³n de TimeUnit (incluida en el archivo original; Ãºtil cuando se usa process.waitFor(tiempo, TimeUnit.SECONDS))
+import java.util.concurrent.TimeUnit
+
+fun main() {
+    // Comentario original de la profesora:
+    // Crear un proceso para ejecutar el comando 'grep'
+    // Grep sirve para buscar una cadena de texto en un archivo
+    // Sintaxis: grep <patrÃ³n_a_buscar> <nombre_del_archivo>
+    val processBuilder = ProcessBuilder("bash","-c","grep cadena_a_buscar archivo.txt")
+
+    // Fija la carpeta donde bash buscarÃ¡ el fichero 'archivo.txt'
+    processBuilder.directory(File("C:\\Users\\Usuario\\Desktop\\2DAM-AS-2627\\Kotlin_Practicas\\src\\Tema1"))
+
+    // Comentario original de la profesora:
+    // Unifica la salida de error con la estÃ¡ndar (muy Ãºtil aquÃ­ por si 'archivo.txt' no existe)
+    processBuilder.redirectErrorStream(true) // Redirigir errores al flujo de salida
+
+    try {
+        // Comentario original de la profesora:
+        val process = processBuilder.start() // Iniciar el proceso
+
+        // Comentario original de la profesora:
+        // Leer la salida del proceso
+        val reader = BufferedReader(InputStreamReader(process.inputStream))
+        var line: String?
+        // Imprime Ãºnicamente las lÃ­neas de 'archivo.txt' que contengan "cadena_a_buscar" (o el mensaje de error si el archivo no existe)
+        while (reader.readLine().also { line = it } != null) {
+            println(line)
+        }
+
+        // Comentario original de la profesora:
+        // Esperar a que el proceso termine
+        val exitCode = process.waitFor()
+        println("Proceso terminado con cÃ³digo de salida: $exitCode")
+    } catch (e: Exception) {
+        // Captura fallos al lanzar el proceso (por ejemplo, si el directorio indicado en .directory() no existe en el PC)
+        e.printStackTrace()
+    }
+}
+
+=== ARCHIVO: ProcessHandle.kt ===
+/*
+Este archivo introduce la interfaz ProcessHandle (aÃ±adida en Java 9+), que permite inspeccionar,
+monitorizar y gestionar tanto subprocesos creados por nosotros como cualquier otro proceso
+activo en el Sistema Operativo, incluido nuestro propio programa en ejecuciÃ³n.
+*/
+
+/*
+Puntos clave para estudio de ProcessHandle.kt:
+
+- Diferencia entre `Process` y `ProcessHandle`:
+    - `Process`: Representa Ãºnicamente a un proceso hijo que hemos lanzado nosotros mismos con `ProcessBuilder.start()` o `Runtime.exec()`, dÃ¡ndonos acceso a sus tuberÃ­as (`inputStream`, `outputStream`, `errorStream`).
+    - `ProcessHandle`: Es un manejador ligero que sirve para consultar informaciÃ³n del sistema operativo (PID, usuario propietario, comando ejecutado, hora de inicio, procesos padre/hijos) o matar procesos (`destroy()`), tanto si los hemos creado nosotros (`process.toHandle()`) como si son procesos externos del sistema (`ProcessHandle.allProcesses()`).
+
+- Uso de `Optional` en `processHandle.info()`:
+    Como segÃºn los permisos del sistema operativo algunos datos pueden estar ocultos o no disponibles, los mÃ©todos de `ProcessHandle.Info` (`command()`, `user()`, `startInstant()`) devuelven un objeto `Optional`. Por eso se usa `.orElse("desconocido")` para dar un valor por defecto si el dato no estÃ¡ disponible.
+*/
+
+// Define que este archivo pertenece al paquete Tema1
+package Tema1
+
+// Importa ProcessBuilder
+import java.lang.ProcessBuilder
+
+fun main() {
+    // Comentario original de la profesora:
+    // Crear un proceso para ejecutar el comando 'sleep 10'
+    // El comando 'sleep 10' mantiene vivo al proceso hijo durante 10 segundos sin hacer nada
+    val processBuilder = ProcessBuilder("bash", "-c", "sleep 10 ")
+    try {
+        // Comentario original de la profesora:
+        val process = processBuilder.start() // Iniciar el proceso
+        // Convierte nuestro objeto Process en un ProcessHandle para acceder a la API de monitorizaciÃ³n
+        val processHandle = process.toHandle() // Obtener el ProcessHandle del proceso
+
+        // Obtiene e imprime el identificador numÃ©rico (PID) del proceso hijo en el sistema operativo
+        println("Proceso iniciado con PID: ${processHandle.pid()}")
+
+        /*
+        // Bloque comentado por la profesora: Consulta de metadatos del proceso mediante ProcessHandle.Info
+        // isAlive(): Devuelve true si el proceso hijo todavÃ­a se estÃ¡ ejecutando en el SO
+        println("Â¿El proceso estÃ¡ vivo? ${processHandle.isAlive()}")
+        // info(): Toma una instantÃ¡nea (snapshot) con los metadatos del proceso en el sistema operativo
+        val info = processHandle.info()
+        // command(): Ruta del ejecutable (ej. /usr/bin/sleep o /bin/bash). Si el SO no lo proporciona, devuelve "desconocido"
+        println("Comando: ${info.command().orElse("desconocido")}")
+        // user(): Nombre del usuario del sistema operativo propietario del proceso
+        println("Usuario: ${info.user().orElse("desconocido")}")
+        // startInstant(): Momento exacto (fecha y hora UTC) en el que arrancÃ³ el proceso
+        println("Inicio: ${info.startInstant().orElse(null)}")
+         */
+
+        // Comentario original de la profesora:
+        // Esperar a que el proceso termine
+        // El padre espera los 10 segundos que dura el sleep y recoge el cÃ³digo de salida (0)
+        val exitCode = process.waitFor()
+        println("Proceso terminado con cÃ³digo de salida: $exitCode")
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
+
+// Comentario original de la profesora:
+// ProcessHandle tambiÃ©n permite consultar procesos que no hemos lanzado nosotros.
+    /*
+     // Ejemplo comentado 1: Obtener el PID de nuestra propia mÃ¡quina virtual Java (el proceso padre actual)
+     val actual = ProcessHandle.current()
+     println("PID de esta JVM: ${actual.pid()}")
+    */
+
+// Comentario original de la profesora:
+// Por ejemplo, podemos obtener el proceso actual o recorrer todos los procesos del sistema:
+    /*
+     // Ejemplo comentado 2: Listar procesos del sistema operativo sin usar comandos externos como 'ps' o 'tasklist'
+     // ProcessHandle.allProcesses(): Devuelve un Stream con todos los procesos visibles en el SO para el usuario actual
+     ProcessHandle.allProcesses()
+        // Filtra solo aquellos procesos de los que tengamos permiso para ver su ruta de comando
+        .filter { it.info().command().isPresent }
+        // Se queda solo con los primeros 10 procesos para no saturar la consola
+        .limit(10)
+        // Imprime el PID y el comando ejecutable de cada uno de esos 10 procesos
+        .forEach { println("${it.pid()} -> ${it.info().command().get()}") }
+     */
+}
+
+=== ARCHIVO: ProcessPs.kt ===
+/*
+Este archivo ejecuta el comando 'ps' (Process Status) de Linux/bash utilizando la estructura
+completa con redirecciÃ³n de errores, control de excepciones y espera del cÃ³digo de salida.
+*/
+
+/*
+Puntos clave para estudio de ProcessPs.kt:
+
+- Comparativa entre `005.kt` y `ProcessPs.kt`:
+    Ambos ejecutan exactamente el mismo comando (`bash -c ps`), pero `ProcessPs.kt` aÃ±ade las tres buenas prÃ¡cticas obligatorias en proyectos reales o exÃ¡menes:
+    1. `redirectErrorStream(true)` para no perder mensajes de error.
+    2. Bloque `try-catch` para evitar que el programa colapse ante una `IOException`.
+    3. `process.waitFor()` para sincronizar el cierre del proceso hijo y verificar su cÃ³digo de retorno (`exitCode`).
+
+- Â¿QuÃ© columnas muestra el comando `ps` simple por pantalla?
+    - `PID`: Identificador Ãºnico de cada proceso.
+    - `TTY`: Terminal asociada al proceso.
+    - `TIME`: Tiempo total de CPU consumido por el proceso.
+    - `CMD`: Nombre del comando que se estÃ¡ ejecutando (verÃ¡s `bash` y el propio `ps`).
+*/
+
+// Define que este archivo pertenece al paquete Tema1
+package Tema1
+
+// Importaciones estÃ¡ndar para entrada/salida y gestiÃ³n de procesos
+import java.io.File
+import java.io.InputStreamReader
+import java.io.BufferedReader
+import java.lang.ProcessBuilder
+import java.util.concurrent.TimeUnit
+
+fun main() {
+    // Comentario original de la profesora:
+    // Crear un proceso para ejecutar el comando 'ps'
+    // 'ps' sin argumentos muestra los procesos activos asociados a la sesiÃ³n de terminal actual
+    val processBuilder = ProcessBuilder("bash","-c","ps")
+
+    // Comentario original de la profesora:
+    // Fusiona stderr con stdout para leer cualquier posible error desde el mismo inputStream
+    processBuilder.redirectErrorStream(true) // Redirigir errores al flujo de salida
+
+    try {
+        // Comentario original de la profesora:
+        val process = processBuilder.start() // Iniciar el proceso
+
+        // Comentario original de la profesora:
+        // Leer la salida del proceso
+        val reader = BufferedReader(InputStreamReader(process.inputStream))
+        var line: String?
+        // Recorre e imprime la cabecera ("PID TTY TIME CMD") y cada fila de procesos devuelta por 'ps'
+        while (reader.readLine().also { line = it } != null) {
+            println(line)
+        }
+
+        // Comentario original de la profesora:
+        // Esperar a que el proceso termine
+        // Espera a que 'ps' finalice y devuelve su cÃ³digo de salida (0 si todo fue bien)
+        val exitCode = process.waitFor()
+        println("Proceso terminado con cÃ³digo de salida: $exitCode")
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
+}
+
+=== ARCHIVO: ProcessSleep.kt ===
+/*
+Este archivo muestra cÃ³mo lanzar un proceso de larga duraciÃ³n ('sleep 10') con ProcessBuilder
+y cÃ³mo el proceso padre queda sincronizado esperando a que finalice tanto al leer su flujo
+de salida como al invocar waitFor().
+*/
+
+/*
+Puntos clave para estudio de ProcessSleep.kt:
+
+- Diferencia importante respecto a 004.kt (CÃ³mo interpreta bash el flag -c):
+    - En 004.kt estaba escrito: ProcessBuilder("bash", "-c", "sleep", "2"). Cuando usas "-c", bash solo lee el PRIMER String que va tras "-c" como comando ("sleep") y asigna los siguientes Strings ("2") como parÃ¡metros posicionales ($0, $1...), por lo que 'sleep' fallaba por falta de argumentos.
+    - AquÃ­ en ProcessSleep.kt estÃ¡ escrito correctamente: ProcessBuilder("bash", "-c", "sleep 10 "). Al ir "sleep 10 " dentro del mismo String, bash sÃ­ le pasa el 10 al comando sleep y el proceso dura exactamente 10 segundos.
+
+- Â¿DÃ³nde espera realmente los 10 segundos nuestro programa padre en este cÃ³digo?
+    Aunque parezca que espera en `process.waitFor()`, en realidad se queda esperando 10 segundos en la lÃ­nea `while (reader.readLine().also { line = it } != null)`.
+    Â¿Por quÃ©? Porque `readLine()` es una operaciÃ³n bloqueante: como `sleep 10` no imprime nada pero mantiene su tuberÃ­a stdout abierta mientras estÃ¡ vivo, `readLine()` se queda esperando 10 segundos hasta que `sleep` termina y el sistema operativo cierra la tuberÃ­a (devolviendo `null`). Cuando llega a `waitFor()`, el proceso acaba de terminar y devuelve `0` al instante.
+*/
+
+// Define que este archivo pertenece al paquete Tema1
+package Tema1
+
+// Importaciones para el manejo de flujos de lectura y creaciÃ³n de procesos
+import java.io.File
+import java.io.InputStreamReader
+import java.io.BufferedReader
+import java.lang.ProcessBuilder
+import java.util.concurrent.TimeUnit
+
+fun main() {
+    // Comentario original de la profesora:
+    // Crear un proceso para ejecutar el comando 'sleep'
+    // Sleep sirve para crear un proceso que se ejecute en segundo plano
+    // (Nota de estudio: 'sleep 10' pausa al subproceso durante 10 segundos simulando una tarea pesada o en segundo plano,
+    // aunque en este cÃ³digo el padre esperarÃ¡ a que termine antes de finalizar).
+    val processBuilder = ProcessBuilder("bash","-c","sleep 10 ")
+
+    // Comentario original de la profesora:
+    // Fusiona el canal de errores (stderr) con el canal de salida estÃ¡ndar (stdout)
+    processBuilder.redirectErrorStream(true) // Redirigir errores al flujo de salida
+
+    try {
+        // Comentario original de la profesora:
+        val process = processBuilder.start() // Iniciar el proceso
+
+        // Comentario original de la profesora:
+        // Leer la salida del proceso
+        val reader = BufferedReader(InputStreamReader(process.inputStream))
+        var line: String?
+        // 'sleep 10' no escribe texto por consola, pero este bucle se queda bloqueado durante los 10 segundos
+        // esperando a que el proceso hijo cierre su flujo de salida al terminar
+        while (reader.readLine().also { line = it } != null) {
+            println(line)
+        }
+
+        // Comentario original de la profesora:
+        // Esperar a que el proceso termine
+        // Asegura que el proceso hijo haya finalizado en el SO y recoge su cÃ³digo de salida (0 = terminÃ³ sin errores)
+        val exitCode = process.waitFor()
+        println("Proceso terminado con cÃ³digo de salida: $exitCode")
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
+}
+
+=== ARCHIVO: PruebasIntegracion.kt ===
+/*
+Este archivo introduce el concepto de Pruebas de IntegraciÃ³n (Integration Testing) utilizando
+JUnit 5 para verificar la comunicaciÃ³n e interacciÃ³n entre dos componentes o procesos simulados
+(ProcessA y ProcessB).
+*/
+
+/*
+Puntos clave para estudio de PruebasIntegracion.kt:
+
+- Diferencia de examen entre Prueba Unitaria y Prueba de IntegraciÃ³n:
+    - Prueba Unitaria (Unit Test): Prueba un Ãºnico mÃ©todo o clase de forma totalmente aislada (por ejemplo, probar que el mÃ©todo `sumar(2, 2)` devuelve `4`).
+    - Prueba de IntegraciÃ³n (Integration Test): Prueba que varios mÃ³dulos, clases o procesos separados funcionen correctamente cuando se conectan entre sÃ­ (por ejemplo, que el Proceso A envÃ­e un dato y el Proceso B lo reciba).
+
+- Â¡OJO! Detalle crÃ­tico si ejecutas este test en IntelliJ IDEA (Fallo intencionado o incompleto en el cÃ³digo original):
+    Si le das al botÃ³n "Run Test" tal y como estÃ¡ escrito el archivo original, el test FALLARÃ con:
+    `AssertionFailedError: expected: <Hello from A> but was: <null>`
+    Â¿Por quÃ©? Porque `ProcessA` guarda el texto en su propia variable privada `message`, pero nunca se lo pasa a `ProcessB` (la variable `message` de `ProcessB` sigue siendo `null`).
+    Para que el test pase en verde si te lo piden corregir en clase, `ProcessA` tendrÃ­a que enviarle el mensaje a `ProcessB` (por ejemplo: `fun sendMessage(msg: String, destino: ProcessB) { destino.recibir(msg) }`) o compartir un canal comÃºn.
+*/
+
+// Define que este archivo pertenece al paquete Tema1
+package Tema1
+
+// Importa assertEquals de JUnit 5 (Jupiter) para comprobar que el valor obtenido coincide con el esperado
+import org.junit.jupiter.api.Assertions.assertEquals
+// Importa la anotaciÃ³n @Test que marca un mÃ©todo como ejecutable por el motor de pruebas de JUnit
+import org.junit.jupiter.api.Test
+
+/*
+Comentario original de la profesora:
+En este ejemplo, tenemos dos procesos simulados, ProcessA y ProcessB.
+La prueba de integraciÃ³n testProcessCommunication verifica que ProcessA
+pueda enviar un mensaje a ProcessB y que ProcessB lo reciba correctamente.
+ */
+class IntegrationTest {
+
+    // @Test indica a JUnit e IntelliJ IDEA que esta funciÃ³n es una prueba automatizada (aparecerÃ¡ el icono de Play verde al lado)
+    @Test
+    fun testProcessCommunication() {
+        // 1. Fase Arrange (PreparaciÃ³n): Instanciamos e iniciamos ambos procesos simulados
+        val processA = ProcessA()
+        val processB = ProcessB()
+
+        processA.start()
+        processB.start()
+
+        // 2. Fase Act (AcciÃ³n): El proceso A envÃ­a el mensaje
+        processA.sendMessage("Hello from A")
+
+        // 3. Fase Assert (VerificaciÃ³n): Comprobamos que lo que recibe B sea exactamente "Hello from A"
+        // Primer argumento: valor esperado ("Hello from A"). Segundo argumento: valor real obtenido (processB.receiveMessage()).
+        // (Nota: Como en el cÃ³digo original ProcessA y ProcessB no estÃ¡n conectados, processB.receiveMessage() devuelve null y el test falla aquÃ­).
+        assertEquals("Hello from A", processB.receiveMessage())
+    }
+}
+
+// Clase que simula el proceso emisor
+class ProcessA {
+    // Variable privada donde ProcessA almacena internamente el mensaje
+    private var message: String? = null
+
+    fun start() {
+        // Comentario original de la profesora:
+        // SimulaciÃ³n de inicio del proceso
+    }
+
+    // Guarda el mensaje en la propiedad interna de ProcessA
+    fun sendMessage(msg: String) {
+        message = msg
+    }
+}
+
+// Clase que simula el proceso receptor
+class ProcessB {
+    // Variable privada de ProcessB (inicializada a null y nunca modificada en este esqueleto)
+    private var message: String? = null
+
+    fun start() {
+        // Comentario original de la profesora:
+        // SimulaciÃ³n de inicio del proceso
+    }
+
+    // Devuelve el contenido del mensaje de ProcessB (devolverÃ¡ null a menos que se conecte con ProcessA)
+    fun receiveMessage(): String? {
+        return message
+    }
+}
+
+=== ARCHIVO: PruebaUnitaria.kt ===
+/*
+Este archivo muestra la estructura mÃ­nima de una Prueba Unitaria (Unit Test) en Kotlin
+utilizando el framework JUnit 5 (Jupiter).
+*/
+
+/*
+Puntos clave para estudio de PruebaUnitaria.kt:
+
+- AnatomÃ­a de un mÃ©todo en JUnit 5:
+    1. `@Test`: AnotaciÃ³n obligatoria encima de la funciÃ³n. Sin ella, JUnit ignora el mÃ©todo. Los mÃ©todos `@Test` no pueden ser `private` ni devolver ningÃºn valor (`Unit`).
+    2. `assertEquals(esperado, actual)`: EvalÃºa si el resultado es correcto.
+       - Si `esperado == actual` (4 == 4): El test pasa (icono verde en IntelliJ).
+       - Si `esperado != actual`: Lanza un `AssertionFailedError`, el test se marca como fallido (icono rojo/amarillo) y muestra quÃ© valor esperaba y cuÃ¡l recibiÃ³.
+
+- Nota sobre el comentario del archivo original:
+    El comentario de cabecera menciona una clase `Calculator` sumando `2 y 3 = 5`, pero en el cÃ³digo se ha simplificado directamente a `assertEquals(4, 2 + 2)` para no necesitar una clase externa.
+*/
+
+// Define que este archivo pertenece al paquete Tema1
+package Tema1
+
+// Importa el mÃ©todo estÃ¡tico assertEquals de la librerÃ­a JUnit 5 (org.junit.jupiter.api)
+import org.junit.jupiter.api.Assertions.assertEquals
+// Importa la anotaciÃ³n @Test de JUnit 5
+import org.junit.jupiter.api.Test
+
+/* Comentario original de la profesora:
+En este ejemplo, estamos probando una clase Calculator que tiene
+un mÃ©t0do add. La prueba verifica que la suma de 2 y 3 sea igual a 5.
+Para ejecutar las pruebas unitarias, podemos utilizar un entorno de desarrollo
+ integrado (IDE) como IntelliJ IDEA, que tiene soporte integrado para JUnit.
+TambiÃ©n podemos ejecutar las pruebas desde la lÃ­nea de comandos utilizando Gradle o Maven.
+ */
+class CalculatorTest {
+
+    // Marca la funciÃ³n 'suma' como un caso de prueba unitaria
+    @Test
+    fun suma() {
+        // Verifica que el resultado esperado (primer parÃ¡metro: 4) sea igual al resultado de la operaciÃ³n (segundo parÃ¡metro: 2 + 2)
+        assertEquals(4, 2 + 2)
+
+    }
+}
+
+=== ARCHIVO: PruebaUnitariaMultiproceso.kt ===
+/*
+Este archivo demuestra cÃ³mo diseÃ±ar una prueba unitaria de concurrencia (multihilo) con JUnit 5
+para verificar que una clase compartida (Counter) no sufre condiciones de carrera (Race Conditions)
+gracias a la anotaciÃ³n @Synchronized.
+*/
+
+/*
+Puntos clave para estudio de PruebaUnitariaMultiproceso.kt:
+
+- Â¿QuÃ© es una CondiciÃ³n de Carrera (Race Condition) y por quÃ© ocurre en `count++`?
+    Aunque `count++` parezca una sola lÃ­nea, para el procesador son 3 pasos separados:
+    1. Leer el valor actual de `count` de la memoria RAM (ej. vale 5).
+    2. Sumarle 1 en un registro de la CPU (5 + 1 = 6).
+    3. Guardar el 6 de vuelta en la memoria RAM.
+    Si 100 hilos hacen esto a la vez SIN `@Synchronized`, dos hilos leen el 5 al mismo tiempo, ambos calculan 6 y ambos guardan 6 (se pierde un incremento). Al final del test, en lugar de dar 100.000, darÃ­a un nÃºmero menor aleatorio (ej. 78.432) y el test fallarÃ­a.
+
+- Â¿QuÃ© hace `@Synchronized` en Kotlin?
+    Es el equivalente en Kotlin a la palabra clave `synchronized` en los mÃ©todos de Java.
+    Convierte el mÃ©todo `increment()` en una secciÃ³n crÃ­tica protegida por el monitor intrÃ­nseco del objeto `Counter`: solo un hilo puede ejecutar `increment()` a la vez, garantizando que el resultado final sea exactamente 100.000 (100 hilos x 1000 incrementos).
+
+- Importancia de `threads.forEach { it.join() }` en el test:
+    Si no hacemos `.join()` antes de `assertEquals(100000, counter.getCount())`, el hilo principal de JUnit comprobarÃ­a el contador cuando los 100 hilos apenas acaban de arrancar, dando un valor cercano a 0 y fallando el test.
+*/
+
+// Define que este archivo pertenece al paquete Tema1
+package Tema1
+
+// Importaciones de JUnit 5 para aserciones y marcado de tests
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Test
+// Importa la funciÃ³n helper thread de Kotlin para lanzar hilos
+import kotlin.concurrent.thread
+
+
+/*
+Comentario original de la profesora:
+En este ejemplo, la clase Counter tiene un mÃ©t0do increment que incrementa
+ un contador de manera segura utilizando la palabra clave @Synchronized.
+ La prueba testConcurrentIncrement crea 100 hilos, cada uno incrementando
+ el contador 1000 veces. Al final, se verifica que el valor del contador sea
+ 100000, asegurando que la concurrencia se maneje correctamente.
+ */
+
+class Counter {
+    // Estado interno compartido por todos los hilos
+    private var count = 0
+
+    // @Synchronized bloquea el monitor del objeto Counter antes de entrar al mÃ©todo y lo libera al salir.
+    // Impide que dos hilos ejecuten 'count++' simultÃ¡neamente (evita la condiciÃ³n de carrera).
+    @Synchronized
+    fun increment() {
+        count++
+    }
+
+    // Devuelve el valor acumulado del contador
+    fun getCount(): Int {
+        return count
+    }
+}
+
+class CounterTest {
+
+    @Test
+    fun testConcurrentIncrement() {
+        // Instancia Ãºnica del contador que compartirÃ¡n los 100 hilos
+        val counter = Counter()
+
+        // Crea una lista de 100 hilos (Ã­ndices del 0 al 99) que arrancan inmediatamente en paralelo
+        val threads = List(100) {
+            thread {
+                // Cada uno de los 100 hilos llama 1000 veces al mÃ©todo sincronizado increment()
+                repeat(1000) {
+                    counter.increment()
+                }
+            }
+        }
+
+        // El hilo del test espera a que los 100 hilos hayan terminado sus 1000 repeticiones cada uno
+        threads.forEach { it.join() }
+
+        // Si la sincronizaciÃ³n funcionÃ³ y no se perdiÃ³ ningÃºn incremento: 100 * 1000 = 100000
+        assertEquals(100000, counter.getCount())
+    }
+}
+
+=== ARCHIVO: Runtime.kt ===
+/*
+Este archivo enseÃ±a la forma clÃ¡sica (anterior a Java 5) de crear procesos mediante el patrÃ³n
+Singleton `Runtime.getRuntime().exec(...)`, explicando sus limitaciones frente a ProcessBuilder.
+*/
+
+/*
+Puntos clave para estudio de Runtime.kt:
+
+- Comparativa de examen: `Runtime.getRuntime().exec()` vs `ProcessBuilder`:
+    1. AntigÃ¼edad: `Runtime.exec()` existe desde Java 1.0; `ProcessBuilder` se introdujo en Java 5 como su reemplazo moderno.
+    2. RedirecciÃ³n y configuraciÃ³n: Con `ProcessBuilder` es facilÃ­simo unir errores (`redirectErrorStream(true)`), heredar consola (`inheritIO()`) o redirigir a ficheros (`redirectOutput(...)`) antes de hacer `.start()`. Con `Runtime.exec()`, el proceso arranca directamente y no permite preconfigurar redirecciones.
+    3. Obsolescencia de `exec(String)`: Pasar todo el comando en un solo String (`exec("ls -l")`) estÃ¡ **deprecated (obsoleto) desde Java 18** porque simplemente corta el texto por los espacios en blanco (usando `StringTokenizer`), rompiendo rutas con espacios como `"C:\\Program Files\\..."`. Siempre hay que pasar un array de Strings (`arrayOf(...)`).
+
+- Detalle tÃ©cnico importante sobre `arrayOf("bash", "-c", "ls", "-l")` en este archivo:
+    Tal y como estÃ¡ escrito en el cÃ³digo original (`arrayOf("bash", "-c", "ls", "-l")`), como a `bash -c` se le pasan `"ls"` y `"-l"` en elementos separados del array, bash ejecuta `"ls"` (sin el `-l`) y guarda `"-l"` en la variable `$0`.
+    - Si usas `bash -c`: lo ideal es `arrayOf("bash", "-c", "ls -l")`.
+    - Si llamas directamente al binario en Linux sin bash: entonces sÃ­ se separa como `arrayOf("ls", "-l")`.
+*/
+
+// Define que este archivo pertenece al paquete Tema1
+package Tema1
+
+// Importaciones para leer la salida estÃ¡ndar del proceso creado
+import java.io.BufferedReader
+import java.io.InputStreamReader
+
+fun main() {
+    try {
+        // Runtime.getRuntime(): Devuelve la instancia Ãºnica (Singleton) del entorno de ejecuciÃ³n de la JVM actual.
+        // .exec(arrayOf(...)): Crea e inicia inmediatamente el proceso hijo (equivale al .start() de ProcessBuilder) y devuelve un objeto Process.
+        val process = Runtime.getRuntime().exec(arrayOf("bash","-c","ls", "-l"))
+
+        // Comentario original de la profesora (MUY IMPORTANTE PARA TEORÃA DE EXAMEN):
+        // La versiÃ³n Runtime.exec(String), que recibe el comando completo en una sola cadena,
+        // estÃ¡ marcada como obsoleta (deprecated) desde Java 18,
+        // porque divide el texto por espacios y falla con rutas o argumentos que los contienen.
+        // Hay que usar la versiÃ³n que recibe un array (exec(arrayOf("ls", "-l"))) o,
+        // mejor aÃºn, ProcessBuilder.
+
+        // Conectamos un BufferedReader a la salida estÃ¡ndar (inputStream) del proceso hijo
+        val reader = BufferedReader(InputStreamReader(process.inputStream))
+        var line: String?
+        // Leemos e imprimimos cada lÃ­nea devuelta por el comando
+        while (reader.readLine().also { line = it } != null) {
+            println(line)
+        }
+
+        // Esperamos a que el proceso termine y mostramos su cÃ³digo de salida (0 = Ã©xito)
+        val exitCode = process.waitFor()
+        println("Proceso terminado con cÃ³digo de salida: $exitCode")
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
+}
+
+=== ARCHIVO: SegundoPlano.kt ===
+/*
+Este archivo demuestra cÃ³mo ejecutar un proceso hijo en segundo plano (background / asÃ­ncrono)
+sin bloquear al proceso padre, descartando sus flujos de salida con Redirect.DISCARD y
+reaccionando a su finalizaciÃ³n mediante un callback asÃ­ncrono con onExit().
+*/
+
+/*
+Puntos clave para estudio de SegundoPlano.kt:
+
+- Diferencia clave entre Primer Plano (PrimerPlano.kt) y Segundo Plano (SegundoPlano.kt):
+    - En Primer Plano: El padre lanza al hijo e inmediatamente hace `process.waitFor()` o lee su `inputStream` en un bucle bloqueante. El padre se queda quieto hasta que el hijo termina.
+    - En Segundo Plano: El padre lanza al hijo y NO lo espera inmediatamente, sino que continÃºa ejecutando su propio cÃ³digo en paralelo (el bucle `repeat(3)`).
+
+- Â¿Por quÃ© se usa `ProcessBuilder.Redirect.DISCARD` en procesos en segundo plano?
+    Equivale a hacer `> /dev/null 2>&1` en Linux.
+    Si un proceso hijo en segundo plano escribe mucho texto y el padre no lo lee (porque estÃ¡ ocupado haciendo otras cosas), el buffer de la tuberÃ­a del sistema operativo se llena y el proceso hijo se queda congelado (bloqueado). Con `DISCARD`, el sistema operativo tira directamente la salida y evitamos bloqueos.
+
+- Â¿CÃ³mo funciona `process.onExit().thenAccept { ... }`?
+    `process.onExit()` devuelve un `CompletableFuture<Process>` (promesa asÃ­ncrona introducida en Java 9).
+    Con `.thenAccept { p -> ... }`, registramos una funciÃ³n (callback) que se ejecutarÃ¡ automÃ¡ticamente en un hilo separado en el instante exacto en que el hijo termine, sin detener al hilo principal del padre.
+*/
+
+// Define que este archivo pertenece al paquete Tema1
+package Tema1
+
+fun main() {
+    // Configura un subproceso que tardarÃ¡ 5 segundos en terminar ("sleep 5")
+    val process = ProcessBuilder("bash","-c","sleep 5")
+        // Comentario original de la profesora:
+        // Descarta todo lo que el hijo imprima por stdout para no llenar buffers de memoria
+        .redirectOutput(ProcessBuilder.Redirect.DISCARD) // Descartar la salida
+        // Comentario original de la profesora:
+        // Descarta todo lo que el hijo imprima por stderr
+        .redirectError(ProcessBuilder.Redirect.DISCARD)  // Descartar los errores
+        // Inicia el proceso hijo en el sistema operativo y devuelve el control inmediatamente al padre
+        .start()
+
+    // Imprime el PID del proceso hijo reciÃ©n arrancado
+    println("Proceso iniciado en segundo plano con PID: ${process.pid()}")
+
+    // Comentario original de la profesora:
+    // Registrar quÃ© hacer cuando termine, sin bloquear al padre
+    // onExit() vigila al proceso en segundo plano; cuando pasen los 5 segundos del sleep,
+    // ejecutarÃ¡ automÃ¡ticamente este bloque lambda imprimiendo su PID y su cÃ³digo de salida (exitValue())
+    process.onExit().thenAccept { p ->
+        println("El proceso ${p.pid()} ha terminado con cÃ³digo ${p.exitValue()}")
+    }
+
+    // Comentario original de la profesora:
+    // Mientras tanto, el programa padre sigue trabajando
+    // Este bucle dura 3 repeticiones x 3 segundos = 9 segundos en total.
+    // Como el hijo solo dura 5 segundos, veremos el mensaje de "El proceso X ha terminado..."
+    // intercalado por consola en mitad del trabajo del padre (entre la iteraciÃ³n 1 y la 2).
+    repeat(3) { i ->
+        println("El padre sigue trabajando... ($i)")
+        Thread.sleep(3000)
+    }
+
+    // Comentario original de la profesora:
+    // Si el trabajo del padre fuera mÃ¡s corto que el del hijo, la JVM se cerrarÃ­a antes de que saltara el onExit().
+    // Este waitFor() final garantiza que main() no se cierre si el hijo aÃºn siguiera vivo.
+    process.waitFor() // Solo para que el ejemplo no termine antes que el hijo
+}
+
+=== ARCHIVO: Semaforo.kt ===
+/*
+Este archivo explica el uso de SemÃ¡foros (java.util.concurrent.Semaphore) para controlar
+el acceso concurrente de mÃºltiples hilos a un recurso compartido mediante un sistema de permisos.
+*/
+
+/*
+Puntos clave para estudio de Semaforo.kt:
+
+- Diferencia de examen entre un Mutex (`ReentrantLock`) y un SemÃ¡foro (`Semaphore`):
+    1. NÃºmero de hilos permitidos:
+       - Un `Mutex` (`ReentrantLock`) solo deja pasar a **1 hilo** a la vez.
+       - Un `Semaphore(N)` tiene un contador interno de permisos (`permits`). Permite que entren hasta **N hilos simultÃ¡neamente** a la secciÃ³n crÃ­tica.
+       - Caso particular (SemÃ¡foro Binario): Si lo creas con `Semaphore(1)` (como en este archivo), solo hay 1 permiso disponible, por lo que se comporta en la prÃ¡ctica igual que un Mutex.
+    2. Propiedad del bloqueo:
+       - En un `Mutex`, solo el hilo que hizo `lock()` tiene derecho a hacer `unlock()`.
+       - En un `Semaphore`, no existe concepto de "propietario": cualquier hilo podrÃ­a llamar a `release()` para incrementar los permisos.
+
+- Funcionamiento interno de `acquire()` y `release()`:
+    - `semaphore.acquire()`: Si el contador de permisos es `> 0`, resta 1 al contador y el hilo entra. Si el contador es `0`, el hilo se bloquea esperando hasta que alguien libere un permiso.
+    - `semaphore.release()`: Suma 1 al contador de permisos y despierta a un hilo que estuviera esperando en `acquire()`.
+    - Regla de oro: `semaphore.release()` SIEMPRE debe ir dentro de un bloque `finally` para que el permiso se devuelva aunque salte una excepciÃ³n dentro del `try`.
+*/
+
+// Define que este archivo pertenece al paquete Tema1
+package Tema1
+
+// Importa la clase Semaphore del paquete de utilidades de concurrencia de Java
+import java.util.concurrent.Semaphore
+// Importa la funciÃ³n helper thread para crear hilos en Kotlin
+import kotlin.concurrent.thread
+
+fun main() {
+    // Comentario original de la profesora:
+    // Crea un semÃ¡foro con 1 Ãºnico permiso disponible (SemÃ¡foro binario = exclusiÃ³n mutua)
+    // Si pusiÃ©ramos Semaphore(3), podrÃ­an entrar hasta 3 hilos a la vez.
+    val semaphore = Semaphore(1) // SemÃ¡foro binario
+
+    // Creamos e iniciamos 2 hilos concurrentes con identificadores 1 y 2
+    val tareas = (1..2).map { id ->
+        thread {
+            // Solicita 1 permiso al semÃ¡foro:
+            // - El primer hilo que llega ve el contador en 1 -> lo deja en 0 y entra al bloque try.
+            // - El segundo hilo que llega ve el contador en 0 -> se queda bloqueado aquÃ­ esperando.
+            semaphore.acquire()
+            try {
+                // --- INICIO DE LA SECCIÃ“N CRÃTICA ---
+                println("Proceso $id: Accediendo al recurso compartido")
+                // Simula el uso del recurso durante 1 segundo
+                Thread.sleep(1000)
+                println("Proceso $id: Liberando el recurso compartido")
+                // --- FIN DE LA SECCIÃ“N CRÃTICA ---
+            } finally {
+                // Comentario original de la profesora:
+                // Devuelve el permiso al semÃ¡foro (el contador vuelve a 1) y despierta al hilo que esperaba en acquire()
+                semaphore.release() // Liberar siempre, aunque haya una excepciÃ³n
+            }
+        }
+    }
+    // El hilo principal espera a que ambos hilos terminen antes de finalizar el programa
+    tareas.forEach { it.join() }
+}
+
+=== ARCHIVO: Sockets.kt ===
+/*
+Este archivo implementa el lado SERVIDOR de una comunicaciÃ³n entre procesos en red (IPC mediante
+Sockets TCP/IP), abriendo un puerto de escucha con ServerSocket, aceptando la conexiÃ³n de un
+cliente (Sockets02.kt) y leyendo los mensajes que este le envÃ­a.
+*/
+
+/*
+Puntos clave para estudio de Sockets.kt:
+
+- Diferencia fundamental entre `ServerSocket` y `Socket`:
+    - `ServerSocket(9999)`: NO sirve para enviar ni recibir datos directamente. Es Ãºnicamente el "recepcionista" o "centralita" que abre el puerto TCP 9999 en nuestra tarjeta de red y se queda esperando a que llamen.
+    - `val client: Socket = server.accept()`: El mÃ©todo `.accept()` es **bloqueante** (detiene el programa hasta que un cliente se conecta). En cuanto un cliente entra, `.accept()` crea y devuelve un objeto `Socket` normal dedicado exclusivamente a hablar con ese cliente (`client.inputStream` para leerle y `client.outputStream` para responderle).
+
+- Orden de ejecuciÃ³n obligatorio en tus pruebas con IntelliJ IDEA:
+    1. Primero debes dar a "Run" en **`Sockets.kt` (Servidor)**. VerÃ¡s que imprime `"Esperando conexiones..."` y se queda pausado en `server.accept()`.
+    2. Sin parar el servidor, das a "Run" en **`Sockets02.kt` (Cliente)**. En ese instante el servidor se desbloquea, imprime `"Cliente conectado: /127.0.0.1"` y muestra `"Recibido del cliente: Hola"`.
+    *(Si ejecutas el cliente antes que el servidor, fallarÃ¡ con `java.net.ConnectException: Connection refused` porque nadie estÃ¡ escuchando en el puerto 9999).*
+*/
+
+// Define que este archivo pertenece al paquete Tema1
+package Tema1
+
+// Importaciones para leer flujos de texto (BufferedReader, InputStreamReader) y escribir (PrintWriter)
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.io.PrintWriter
+// Importaciones de red: ServerSocket (para el servidor que escucha) y Socket (para la conexiÃ³n activa con el cliente)
+import java.net.ServerSocket
+import java.net.Socket
+
+fun main() {
+    // Comentario original de la profesora:
+    // Iniciar un servidor de sockets
+    // Registra y abre el puerto TCP 9999 en la mÃ¡quina local.
+    // (Ojo: Si ejecutas dos veces el servidor sin cerrar el anterior, lanzarÃ¡ BindException: Address already in use).
+    val server = ServerSocket(9999)
+    println("Esperando conexiones...")
+
+    // server.accept(): Bloquea la ejecuciÃ³n del servidor hasta que un proceso cliente haga Socket("localhost", 9999).
+    // Cuando el cliente se conecta, devuelve un objeto Socket ('client') que representa el canal de comunicaciÃ³n con Ã©l.
+    val client = server.accept()
+    // client.inetAddress: Muestra la direcciÃ³n IP desde la que se ha conectado el cliente (ej. /127.0.0.1)
+    println("Cliente conectado: ${client.inetAddress}")
+
+    // Comentario original de la profesora:
+    // Leer datos del cliente
+    // Conectamos un BufferedReader al flujo de entrada del socket del cliente (lo que el cliente escribe por red)
+    val reader = BufferedReader(InputStreamReader(client.inputStream))
+    var line: String?
+    // Lee lÃ­nea a lÃ­nea los mensajes enviados por el cliente hasta que el cliente cierra su socket (readLine devuelve null)
+    while (reader.readLine().also { line = it } != null) {
+        println("Recibido del cliente: $line")
+    }
+
+    // Comentario original de la profesora:
+    // Cerrar conexiones
+    // Es buena prÃ¡ctica cerrar siempre en orden inverso: primero los flujos, luego el socket del cliente y por Ãºltimo el ServerSocket
+    reader.close()
+    client.close()
+    server.close()
+}
+
+=== ARCHIVO: Sockets02.kt ===
+/*
+Este archivo implementa el lado CLIENTE de la comunicaciÃ³n por Sockets TCP/IP (pareja de Sockets.kt),
+conectÃ¡ndose al puerto 9999 del servidor local y enviÃ¡ndole un mensaje de texto.
+*/
+
+/*
+Puntos clave para estudio de Sockets02.kt:
+
+- Los dos parÃ¡metros de `Socket("localhost", 9999)`:
+    1. Host (`"localhost"` o `"127.0.0.1"`): DirecciÃ³n IP o nombre de dominio de la mÃ¡quina donde estÃ¡ corriendo el `ServerSocket`. Como el servidor y el cliente estÃ¡n en nuestro mismo PC, usamos `"localhost"`.
+    2. Puerto (`9999`): Debe coincidir exactamente con el nÃºmero de puerto que abriÃ³ el `ServerSocket(9999)` en `Sockets.kt`.
+
+- Dos detalles crÃ­ticos de examen sobre `PrintWriter(socket.getOutputStream(), true)` y `writer.println("Hola")`:
+    1. Â¿Por quÃ© el segundo argumento de `PrintWriter` es `true` (`autoFlush = true`)?
+       Porque los flujos de red usan un buffer intermedio. Con `true`, cada vez que llamas a `println(...)`, el `PrintWriter` hace un `.flush()` automÃ¡tico enviando los paquetes de red al instante. Si fuera `false` (valor por defecto), el mensaje podrÃ­a quedarse retenido en la memoria del cliente sin salir por la red hasta llenar el buffer o cerrar el socket.
+    2. Â¿Por quÃ© es obligatorio usar `writer.println("Hola")` y no `writer.print("Hola")`?
+       Porque en `Sockets.kt` el servidor estÃ¡ leyendo con `reader.readLine()`, que busca un salto de lÃ­nea (`\n`) para saber dÃ³nde termina el mensaje. AdemÃ¡s, el `autoFlush` de `PrintWriter` solo se dispara con `println`, `printf` o `format`, nunca con `print`.
+*/
+
+// Define que este archivo pertenece al paquete Tema1
+package Tema1
+
+// Importa PrintWriter para enviar texto formateado fÃ¡cilmente a travÃ©s del flujo de salida del socket
+import java.io.PrintWriter
+// Importa Socket para establecer la conexiÃ³n TCP como cliente
+import java.net.Socket
+
+fun main() {
+    // Intenta conectarse inmediatamente al servidor en la mÃ¡quina local ("localhost") y puerto 9999.
+    // Si el servidor estÃ¡ esperando en server.accept(), aquÃ­ se completa el "Three-Way Handshake" de TCP.
+    val socket = Socket("localhost", 9999)
+
+    // Envuelve el OutputStream del socket en un PrintWriter.
+    // El segundo parÃ¡metro 'true' activa el autoFlush para que los datos se envÃ­en inmediatamente al hacer println().
+    val writer = PrintWriter(socket.getOutputStream(), true)
+
+    // EnvÃ­a la cadena "Hola" seguida de un salto de lÃ­nea (\n) hacia el servidor y vacÃ­a el buffer automÃ¡ticamente
+    writer.println("Hola")
+
+    // Cierra el escritor y el socket del cliente (esto envÃ­a un paquete FIN de TCP al servidor,
+    // haciendo que el bucle while(reader.readLine() != null) del servidor reciba null y termine limpiamente)
+    writer.close()
+    socket.close()
+}
+

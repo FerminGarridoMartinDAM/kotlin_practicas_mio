@@ -1,0 +1,941 @@
+﻿=== ARCHIVO: 001.kt ===
+package Tema1
+
+import java.io.BufferedReader
+import java.io.InputStreamReader
+
+
+fun main() {
+    val process = ProcessBuilder("bash","-c","cd / && ls").start()
+    val reader = BufferedReader(InputStreamReader(process.inputStream))
+    reader.lines().forEach { println(it) }
+}
+
+/*
+fun Poo.main() {
+    // Get-ChildItem es un cmdlet: se ejecuta dentro de powershell
+    val process = ProcessBuilder("powershell", "-Command", "Get-ChildItem").start()
+    process.outputStream.close() // Cerramos la entrada para que PowerShell no espere datos
+    val reader = BufferedReader(InputStreamReader(process.inputStream))
+    reader.lines().forEach { println(it) }
+}
+*/
+
+
+
+/*
+fun Poo.main() {
+    // dir es un comando interno de CMD: se ejecuta dentro de cmd
+    val process = ProcessBuilder("cmd", "c/", "dir").start()
+    val reader = BufferedReader(InputStreamReader(process.inputStream))
+    reader.lines().forEach { println(it) }
+}
+*/
+
+=== ARCHIVO: 002.kt ===
+package Tema1
+
+import java.io.BufferedReader
+import java.io.InputStreamReader
+
+fun main() {
+    val process = ProcessBuilder("cmd", "/c", "dir", "/q").start()
+    val reader = BufferedReader(InputStreamReader(process.inputStream))
+    reader.lines().forEach { println(it) }
+}
+
+
+/*
+
+import java.io.BufferedReader
+import java.io.InputStreamReader
+
+fun Poo.main() {
+    // Todo lo que va tras -Command es la orden que interpreta PowerShell
+    val process = ProcessBuilder("powershell", "-Command", "Get-ChildItem | Format-List").start()
+    process.outputStream.close()
+    val reader = BufferedReader(InputStreamReader(process.inputStream))
+    reader.lines().forEach { println(it) }
+}
+
+ */
+/*
+import java.io.BufferedReader
+import java.io.InputStreamReader
+
+fun Poo.main() {
+    val process = ProcessBuilder("bash","-c","ls -l").start()
+    val reader = BufferedReader(InputStreamReader(process.inputStream))
+    reader.lines().forEach { println(it) }
+}*/
+
+=== ARCHIVO: 003.kt ===
+package Tema1
+
+//Lanzamos el comando a travÃ©s del intÃ©rprete porque,
+// si se pasa directamente a ProcessBuilder, start()
+// lanza una IOException (el ejecutable no existe)
+// y no llega a haber ninguna salida de error que leer.
+// En cambio, el intÃ©rprete sÃ­ arranca y es Ã©l quien escribe
+// el error en su salida de error.
+
+
+import java.io.BufferedReader
+import java.io.InputStreamReader
+
+fun main() {
+    val pb = ProcessBuilder("bash", "-c", "comando_inexistente")
+    pb.redirectErrorStream(false)
+    val process = pb.start()
+    val stdOut = BufferedReader(InputStreamReader(process.inputStream))
+    val stdErr = BufferedReader(InputStreamReader(process.errorStream))
+    println("Salida estÃ¡ndar:")
+    stdOut.lines().forEach { println(it) }
+    println("Salida de error:")
+    stdErr.lines().forEach { println(it) }
+}
+
+=== ARCHIVO: 004.kt ===
+package Tema1
+
+fun main() {
+    println("Iniciando proceso...")
+    val process = ProcessBuilder("bash","-c","sleep", "2").start()
+    process.waitFor()
+    println("Proceso finalizado.")
+}
+
+
+=== ARCHIVO: 005.kt ===
+package Tema1
+
+import java.io.BufferedReader
+import java.io.InputStreamReader
+
+fun main() {
+    val process = ProcessBuilder("bash","-c","ps").start()
+    val reader = BufferedReader(InputStreamReader(process.inputStream))
+    reader.lines().forEach { println(it) }
+}
+
+=== ARCHIVO: 006.kt ===
+package Tema1
+
+import kotlin.concurrent.thread
+
+fun main() {
+    val comandos = listOf("1", "2", "3")
+    val hilos = comandos.map { segundos ->
+        thread {
+            val process = ProcessBuilder("bash","-c","sleep", segundos).start()
+            process.waitFor()
+            println("Proceso sleep $segundos terminado")
+        }
+    }
+    hilos.forEach { it.join() }
+}
+
+=== ARCHIVO: 007.kt ===
+package Tema1
+
+import java.io.BufferedReader
+import java.io.InputStreamReader
+
+fun main() {
+    val echo = ProcessBuilder("bash", "-c", "echo hola").start()
+    val tr = ProcessBuilder("bash", "-c","tr a-z A-Z").start()
+    echo.inputStream.transferTo(tr.outputStream)
+    tr.outputStream.close()
+    val reader = BufferedReader(InputStreamReader(tr.inputStream))
+    reader.lines().forEach { println(it) }
+}
+
+=== ARCHIVO: 008.kt ===
+fun main() {
+
+    repeat(3) {
+
+        Thread.sleep(2000)
+
+        val top = ProcessBuilder("bash",
+            "-c",
+            "ps -eo pid,comm,%cpu --sort=-%cpu | head -n 4"
+        ).start()
+
+        println("=== Muestra ${it + 1} ===")
+
+        top.inputStream.bufferedReader()
+            .lines()
+            .forEach(::println)
+    }
+}
+
+=== ARCHIVO: 009hijo.kt ===
+package Tema1
+
+
+// & "C:\Program Files\JetBrains\IntelliJ IDEA Community Edition 2025.2.2\plugins\Kotlin\kotlinc.ide\bin\kotlinc.bat"
+// 009hijo.kt -include-runtime -d hijo.jar
+
+// Lo podemos aÃ±adir al PATH si vemos que lo vamos a usar mucho
+
+fun main() {
+    println("Â¡Hola desde el proceso hijo!")
+}
+
+=== ARCHIVO: 009Lanzador.kt ===
+package Tema1
+
+fun main() {
+    // El proceso hijo es una nueva JVM que ejecuta hijo.jar
+    val process = ProcessBuilder("java", "-jar", "src/Tema1/hijo.jar")
+        .redirectErrorStream(true)
+        .start()
+
+    process.inputStream.bufferedReader().lines().forEach { println("[hijo]: $it") }
+    println("El hijo terminÃ³ con cÃ³digo ${process.waitFor()}")
+}
+
+=== ARCHIVO: 010.kt ===
+package Tema1
+
+
+=== ARCHIVO: 011.kt ===
+package Tema1
+import java.io.File
+
+fun main() {
+
+    // ==========================================================
+    // PASO 1: Crear un archivo temporal
+    // ==========================================================
+
+    val archivoTemporal = File.createTempFile("practica",".txt")
+    println("Archivo temporal creado:")
+    println(archivoTemporal.absolutePath)
+    println()
+
+    // ==========================================================
+    // PASO 2: Escribir contenido usando printf desde bash
+    // ==========================================================
+    // printf enviarÃ¡ varias lÃ­neas al archivo temporal.
+    //
+    // > redirige la salida al archivo.
+    //
+    val escribir = ProcessBuilder(
+        "bash",
+        "-c",
+        "printf 'LÃ­nea 1\nLÃ­nea 2\nLÃ­nea 3\nLÃ­nea 4\n' > ${archivoTemporal.absolutePath}"
+    ).start()
+
+    escribir.waitFor()
+
+    // ==========================================================
+    // PASO 3: Contar lÃ­neas usando wc -l
+    // ==========================================================
+    val contar = ProcessBuilder(
+        "bash",
+        "-c",
+        "wc -l < ${archivoTemporal.absolutePath}"
+    ).start()
+
+    val numeroLineas = contar.inputStream
+        .bufferedReader()
+        .readText()
+        .trim()
+
+    contar.waitFor()
+
+    println("NÃºmero de lÃ­neas: $numeroLineas")
+    println()
+
+    // ==========================================================
+    // PASO 4: Leer contenido usando cat
+    // ==========================================================
+    val leer = ProcessBuilder(
+        "bash",
+        "-c",
+        "cat ${archivoTemporal.absolutePath}"
+    ).start()
+
+    val contenido = leer.inputStream
+        .bufferedReader()
+        .readText()
+
+    leer.waitFor()
+
+    // ==========================================================
+    // PASO 5: Mostrar contenido
+    // ==========================================================
+    println("Contenido del archivo:")
+    println("----------------------")
+    println(contenido)
+
+    // ==========================================================
+    // PASO 6: Eliminar archivo temporal
+    // ==========================================================
+    archivoTemporal.deleteOnExit()
+}
+
+=== ARCHIVO: BloqueoDeFicheros.kt ===
+package Tema1
+
+import java.nio.channels.FileChannel
+import java.nio.file.Path
+import java.nio.file.StandardOpenOption.*
+
+fun main() {
+    val pid = ProcessHandle.current().pid()
+    val fichero = Path.of("src/Tema1/registro_compartido.txt")
+
+    FileChannel.open(fichero, CREATE, WRITE, APPEND).use { canal ->
+        println("[$pid] Esperando el bloqueo del fichero...")
+        canal.lock().use { // Bloquea hasta que ningÃºn otro proceso tenga el lock
+            println("[$pid] Bloqueo obtenido, escribiendo...")
+            canal.write(java.nio.ByteBuffer.wrap("LÃ­nea escrita por el proceso $pid\n".toByteArray()))
+            Thread.sleep(3000) // Simula una escritura larga
+        } // El bloqueo se libera al salir del bloque
+        println("[$pid] Bloqueo liberado")
+    }
+}
+
+=== ARCHIVO: EjecucionScripts.kt ===
+package Tema1
+
+import java.io.File
+import java.io.InputStreamReader
+import java.io.BufferedReader
+import java.lang.ProcessBuilder
+
+
+fun main() {
+    // Crear un proceso para ejecutar un script externo
+    val processBuilder = ProcessBuilder("path/to/your/script.sh")
+    /*
+    Si queremos pasar algo como parÃ¡metro al script:
+        val processBuilder = ProcessBuilder("path/to/your/script.sh", "arg1", "arg2")
+     */
+    processBuilder.directory(File("/path/to/your/script/directory")) // Establecer el directorio de trabajo
+    processBuilder.redirectErrorStream(true) // Redirigir errores al flujo de salida
+
+    try {
+        val process = processBuilder.start() // Iniciar el proceso
+
+        // Leer la salida del proceso
+        val reader = BufferedReader(InputStreamReader(process.inputStream))
+        var line: String?
+        while (reader.readLine().also { line = it } != null) {
+            println(line)
+        }
+
+        // Esperar a que el proceso termine
+        val exitCode = process.waitFor()
+        println("Proceso terminado con cÃ³digo de salida: $exitCode")
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
+}
+
+=== ARCHIVO: EscritorMemoriaCompartida.kt ===
+package Tema1
+
+import java.nio.channels.FileChannel
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.StandardOpenOption.*
+
+fun main() {
+    val fichero = Path.of("src/Tema1/memoria_compartida.dat")
+
+    FileChannel.open(fichero, CREATE, READ, WRITE).use { canal ->
+        // Mapear 1024 bytes del fichero en memoria
+        val memoria = canal.map(FileChannel.MapMode.READ_WRITE, 0, 1024)
+        val mensaje = "Hola desde la memoria compartida".toByteArray()
+        memoria.putInt(0, mensaje.size)     // Primero la longitud del mensaje
+        memoria.put(4, mensaje)             // DespuÃ©s el contenido
+        println("Mensaje escrito en la memoria compartida")
+    }
+}
+
+=== ARCHIVO: LectorMemoriaCompartida.kt ===
+package Tema1
+
+import java.nio.channels.FileChannel
+import java.nio.file.Path
+import java.nio.file.StandardOpenOption.READ
+
+fun main() {
+    val fichero = Path.of("src/Tema1/memoria_compartida.dat")
+
+    FileChannel.open(fichero, READ).use { canal ->
+        val memoria = canal.map(FileChannel.MapMode.READ_ONLY, 0, 1024)
+
+        val longitud = memoria.getInt(0)
+        val bytes = ByteArray(longitud)
+        memoria.get(4, bytes)
+        println("LeÃ­do de la memoria compartida: ${String(bytes)}")
+    }
+}
+
+=== ARCHIVO: Logging.kt ===
+package Tema1
+
+import java.util.logging.FileHandler
+import java.util.logging.Logger
+import java.util.logging.SimpleFormatter
+import kotlin.concurrent.thread
+
+fun main() {
+    val logger = Logger.getLogger("MyLogger")
+    val fileHandler = FileHandler("app.log", true)
+    fileHandler.formatter = SimpleFormatter()
+    logger.addHandler(fileHandler)
+
+    // SimulaciÃ³n de procesos concurrentes
+    repeat(5) { i ->
+        thread {
+            logger.info("Iniciando proceso $i")
+            Thread.sleep((1000..3000).random().toLong())
+            logger.info("Finalizando proceso $i")
+        }
+    }
+}
+
+=== ARCHIVO: Monitores.kt ===
+package Tema1
+
+import java.util.concurrent.locks.Condition
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.thread
+import kotlin.concurrent.withLock
+
+/*
+En este ejemplo, la clase Monitor encapsula un recurso compartido y
+ proporciona mÃ©todos para acceder a Ã©l de manera segura.
+ El primero que llama a accederRecurso() lo ocupa;
+ el segundo se queda esperando en condition.await()
+ (lo que libera temporalmente el lock)
+ hasta que el primero llama a liberarRecurso()
+ y le avisa con condition.signal().
+ */
+
+
+class Monitor {
+    private val lock = ReentrantLock()
+    private val condition: Condition = lock.newCondition()
+    private var recursoDisponible = true // Al principio el recurso estÃ¡ libre
+
+    fun accederRecurso() {
+        lock.withLock {
+            while (!recursoDisponible) {
+                condition.await()
+            }
+            println("Accediendo al recurso compartido")
+            recursoDisponible = false
+        }
+    }
+
+    fun liberarRecurso() {
+        lock.withLock {
+            println("Liberando el recurso compartido")
+            recursoDisponible = true
+            condition.signal()
+        }
+    }
+}
+
+fun main() {
+    val monitor = Monitor()
+
+    val tareas = (1..2).map {
+        thread {
+            monitor.accederRecurso()
+            Thread.sleep(1000)
+            monitor.liberarRecurso()
+        }
+    }
+    tareas.forEach { it.join() }
+}
+
+=== ARCHIVO: Mutexes.kt ===
+package Tema1
+
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.thread
+import kotlin.concurrent.withLock
+
+fun main() {
+    val lock = ReentrantLock()
+
+    val tareas = (1..2).map { id ->
+        thread {
+            // withLock bloquea el mutex y lo desbloquea al salir del bloque
+            lock.withLock {
+                println("Proceso $id: Accediendo al recurso compartido")
+                Thread.sleep(1000)
+                println("Proceso $id: Liberando el recurso compartido")
+            }
+        }
+    }
+    tareas.forEach { it.join() }
+}
+
+=== ARCHIVO: Pipes.kt ===
+package Tema1
+
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.io.OutputStreamWriter
+import java.lang.ProcessBuilder
+
+fun main() {
+    // Crear un proceso para ejecutar el comando 'grep "kotlin"'
+    val processBuilder = ProcessBuilder("bash", "-c","grep kotlin")
+    val process = processBuilder.start()
+
+    // Escribir en el pipe de entrada del proceso
+    val writer = OutputStreamWriter(process.outputStream)
+    writer.write("kotlin es un lenguaje de programaciÃ³n\n")
+    writer.write("java es otro lenguaje de programaciÃ³n\n")
+    writer.flush()
+    writer.close()
+
+    // Leer la salida del proceso
+    val reader = BufferedReader(InputStreamReader(process.inputStream))
+    var line: String?
+    while (reader.readLine().also { line = it } != null) {
+        println(line)
+    }
+
+    // Esperar a que el proceso termine
+    val exitCode = process.waitFor()
+    println("Proceso terminado con cÃ³digo de salida: $exitCode")
+}
+
+=== ARCHIVO: PrimerPlano.kt ===
+package Tema1
+
+fun main() {
+    val process = ProcessBuilder("bash","-c", "ping -c 3 localhost")
+        .inheritIO() // El hijo escribe directamente en la consola del padre
+        .start()
+
+    //Si da fallo en Windows en Socket: Entrar en WSL y poner:
+    // getcap $(which ping)
+    // sudo setcap cap_net_raw+ep /usr/bin/ping
+
+    println("Proceso iniciado con PID: ${process.pid()}")
+
+    // El padre se bloquea hasta que el hijo termine
+    val exitCode = process.waitFor()
+    println("Proceso terminado con cÃ³digo de salida: $exitCode")
+}
+
+=== ARCHIVO: Process.kt ===
+package Tema1
+
+import java.io.BufferedReader
+import java.io.File
+import java.io.InputStreamReader
+
+fun main(){
+    val processBuilder = ProcessBuilder("bash","-c","ls -l")
+    //Establecer el directorio de trabajo
+    processBuilder.directory(File("C:\\Users\\Usuario\\Desktop\\2DAM-AS-2627\\Kotlin_Practicas\\src\\Tema1"))
+    // Redirigir errores al flujo de salida
+    processBuilder.redirectErrorStream(true)
+    try {
+
+        // Iniciamos el proceso, start devuelve un objeto Process
+        val process = processBuilder.start()
+
+        //Leer la salida del proceso
+        val reader = BufferedReader(InputStreamReader(process.inputStream))
+        var line:String?
+        while(reader.readLine().also {line = it}!= null){
+            println(line)
+        }
+        //Esperar a que el proceso finalice
+        val exitCode = process.waitFor()
+        println("Proceso terminado: $exitCode")
+    }catch(e: Exception){
+        e.printStackTrace()
+    }
+}
+
+=== ARCHIVO: ProcessGrep.kt ===
+package Tema1
+
+import java.io.File
+import java.io.InputStreamReader
+import java.io.BufferedReader
+import java.lang.ProcessBuilder
+import java.util.concurrent.TimeUnit
+
+fun main() {
+    // Crear un proceso para ejecutar el comando 'grep'
+    //Grep sirve para buscar una cadena de texto en un archivo
+    val processBuilder = ProcessBuilder("bash","-c","grep cadena_a_buscar archivo.txt")
+    processBuilder.directory(File("C:\\Users\\Usuario\\Desktop\\2DAM-AS-2627\\Kotlin_Practicas\\src\\Tema1"))
+    processBuilder.redirectErrorStream(true) // Redirigir errores al flujo de salida
+
+    try {
+        val process = processBuilder.start() // Iniciar el proceso
+
+        // Leer la salida del proceso
+        val reader = BufferedReader(InputStreamReader(process.inputStream))
+        var line: String?
+        while (reader.readLine().also { line = it } != null) {
+            println(line)
+        }
+
+        // Esperar a que el proceso termine
+        val exitCode = process.waitFor()
+        println("Proceso terminado con cÃ³digo de salida: $exitCode")
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
+}
+
+=== ARCHIVO: ProcessHandle.kt ===
+package Tema1
+
+import java.lang.ProcessBuilder
+
+fun main() {
+    // Crear un proceso para ejecutar el comando 'sleep 10'
+    val processBuilder = ProcessBuilder("bash", "-c", "sleep 10 ")
+    try {
+        val process = processBuilder.start() // Iniciar el proceso
+        val processHandle = process.toHandle() // Obtener el ProcessHandle del proceso
+
+        println("Proceso iniciado con PID: ${processHandle.pid()}")
+
+        /*
+        println("Â¿El proceso estÃ¡ vivo? ${processHandle.isAlive()}")
+        val info = processHandle.info()
+        println("Comando: ${info.command().orElse("desconocido")}")
+        println("Usuario: ${info.user().orElse("desconocido")}")
+        println("Inicio: ${info.startInstant().orElse(null)}")
+         */
+
+        // Esperar a que el proceso termine
+        val exitCode = process.waitFor()
+        println("Proceso terminado con cÃ³digo de salida: $exitCode")
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
+
+//ProcessHandle tambiÃ©n permite consultar procesos que no hemos lanzado nosotros.
+   /* val actual = ProcessHandle.current()
+    println("PID de esta JVM: ${actual.pid()}")*/
+// Por ejemplo, podemos obtener el proceso actual o recorrer todos los procesos del sistema:
+    /*
+     ProcessHandle.allProcesses()
+        .filter { it.info().command().isPresent }
+        .limit(10)
+        .forEach { println("${it.pid()} -> ${it.info().command().get()}") }
+
+     */
+}
+
+=== ARCHIVO: ProcessPs.kt ===
+package Tema1
+
+import java.io.File
+import java.io.InputStreamReader
+import java.io.BufferedReader
+import java.lang.ProcessBuilder
+import java.util.concurrent.TimeUnit
+
+fun main() {
+    // Crear un proceso para ejecutar el comando 'ps'
+    val processBuilder = ProcessBuilder("bash","-c","ps")
+    processBuilder.redirectErrorStream(true) // Redirigir errores al flujo de salida
+
+    try {
+        val process = processBuilder.start() // Iniciar el proceso
+
+        // Leer la salida del proceso
+        val reader = BufferedReader(InputStreamReader(process.inputStream))
+        var line: String?
+        while (reader.readLine().also { line = it } != null) {
+            println(line)
+        }
+
+        // Esperar a que el proceso termine
+        val exitCode = process.waitFor()
+        println("Proceso terminado con cÃ³digo de salida: $exitCode")
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
+}
+
+=== ARCHIVO: ProcessSleep.kt ===
+package Tema1
+
+import java.io.File
+import java.io.InputStreamReader
+import java.io.BufferedReader
+import java.lang.ProcessBuilder
+import java.util.concurrent.TimeUnit
+
+fun main() {
+    // Crear un proceso para ejecutar el comando 'sleep'
+    //Sleep sirve para crear un proceso que se ejecute en segundo plano
+    val processBuilder = ProcessBuilder("bash","-c","sleep 10 ")
+    processBuilder.redirectErrorStream(true) // Redirigir errores al flujo de salida
+
+    try {
+        val process = processBuilder.start() // Iniciar el proceso
+
+        // Leer la salida del proceso
+        val reader = BufferedReader(InputStreamReader(process.inputStream))
+        var line: String?
+        while (reader.readLine().also { line = it } != null) {
+            println(line)
+        }
+
+        // Esperar a que el proceso termine
+        val exitCode = process.waitFor()
+        println("Proceso terminado con cÃ³digo de salida: $exitCode")
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
+}
+
+=== ARCHIVO: PruebasIntegracion.kt ===
+package Tema1
+
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Test
+
+/*
+En este ejemplo, tenemos dos procesos simulados, ProcessA y ProcessB.
+La prueba de integraciÃ³n testProcessCommunication verifica que ProcessA
+pueda enviar un mensaje a ProcessB y que ProcessB lo reciba correctamente.
+ */
+class IntegrationTest {
+
+    @Test
+    fun testProcessCommunication() {
+        val processA = ProcessA()
+        val processB = ProcessB()
+
+        processA.start()
+        processB.start()
+
+        processA.sendMessage("Hello from A")
+        assertEquals("Hello from A", processB.receiveMessage())
+    }
+}
+class ProcessA {
+    private var message: String? = null
+
+    fun start() {
+        // SimulaciÃ³n de inicio del proceso
+    }
+
+    fun sendMessage(msg: String) {
+        message = msg
+    }
+}
+class ProcessB {
+    private var message: String? = null
+
+    fun start() {
+        // SimulaciÃ³n de inicio del proceso
+    }
+
+    fun receiveMessage(): String? {
+        return message
+    }
+}
+
+=== ARCHIVO: PruebaUnitaria.kt ===
+package Tema1
+
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Test
+
+/* En este ejemplo, estamos probando una clase Calculator que tiene
+un mÃ©t0do add. La prueba verifica que la suma de 2 y 3 sea igual a 5.
+Para ejecutar las pruebas unitarias, podemos utilizar un entorno de desarrollo
+ integrado (IDE) como IntelliJ IDEA, que tiene soporte integrado para JUnit.
+TambiÃ©n podemos ejecutar las pruebas desde la lÃ­nea de comandos utilizando Gradle o Maven.
+ */
+class CalculatorTest {
+
+    @Test
+    fun suma() {
+        assertEquals(4, 2 + 2)
+
+    }
+}
+
+=== ARCHIVO: PruebaUnitariaMultiproceso.kt ===
+package Tema1
+
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Test
+import kotlin.concurrent.thread
+
+
+/*
+En este ejemplo, la clase Counter tiene un mÃ©t0do increment que incrementa
+ un contador de manera segura utilizando la palabra clave @Synchronized.
+ La prueba testConcurrentIncrement crea 100 hilos, cada uno incrementando
+ el contador 1000 veces. Al final, se verifica que el valor del contador sea
+ 100000, asegurando que la concurrencia se maneje correctamente.
+ */
+
+class Counter {
+    private var count = 0
+
+    @Synchronized
+    fun increment() {
+        count++
+    }
+
+    fun getCount(): Int {
+        return count
+    }
+}
+
+class CounterTest {
+
+    @Test
+    fun testConcurrentIncrement() {
+        val counter = Counter()
+        val threads = List(100) {
+            thread {
+                repeat(1000) {
+                    counter.increment()
+                }
+            }
+        }
+        threads.forEach { it.join() }
+        assertEquals(100000, counter.getCount())
+    }
+}
+
+=== ARCHIVO: Runtime.kt ===
+package Tema1
+
+import java.io.BufferedReader
+import java.io.InputStreamReader
+
+fun main() {
+    try {
+        val process = Runtime.getRuntime().exec(arrayOf("bash","-c","ls", "-l"))
+        //La versiÃ³n Runtime.exec(String), que recibe el comando completo en una sola cadena,
+        // estÃ¡ marcada como obsoleta (deprecated) desde Java 18,
+        // porque divide el texto por espacios y falla con rutas o argumentos que los contienen.
+        // Hay que usar la versiÃ³n que recibe un array (exec(arrayOf("ls", "-l"))) o,
+        // mejor aÃºn, ProcessBuilder.
+        val reader = BufferedReader(InputStreamReader(process.inputStream))
+        var line: String?
+        while (reader.readLine().also { line = it } != null) {
+            println(line)
+        }
+        val exitCode = process.waitFor()
+        println("Proceso terminado con cÃ³digo de salida: $exitCode")
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
+}
+
+=== ARCHIVO: SegundoPlano.kt ===
+package Tema1
+
+fun main() {
+    val process = ProcessBuilder("bash","-c","sleep 5")
+        .redirectOutput(ProcessBuilder.Redirect.DISCARD) // Descartar la salida
+        .redirectError(ProcessBuilder.Redirect.DISCARD)  // Descartar los errores
+        .start()
+
+    println("Proceso iniciado en segundo plano con PID: ${process.pid()}")
+
+    // Registrar quÃ© hacer cuando termine, sin bloquear al padre
+    process.onExit().thenAccept { p ->
+        println("El proceso ${p.pid()} ha terminado con cÃ³digo ${p.exitValue()}")
+    }
+
+    // Mientras tanto, el programa padre sigue trabajando
+    repeat(3) { i ->
+        println("El padre sigue trabajando... ($i)")
+        Thread.sleep(3000)
+    }
+
+    process.waitFor() // Solo para que el ejemplo no termine antes que el hijo
+}
+
+=== ARCHIVO: Semaforo.kt ===
+package Tema1
+
+import java.util.concurrent.Semaphore
+import kotlin.concurrent.thread
+
+fun main() {
+    val semaphore = Semaphore(1) // SemÃ¡foro binario
+
+    val tareas = (1..2).map { id ->
+        thread {
+            semaphore.acquire()
+            try {
+                println("Proceso $id: Accediendo al recurso compartido")
+                Thread.sleep(1000)
+                println("Proceso $id: Liberando el recurso compartido")
+            } finally {
+                semaphore.release() // Liberar siempre, aunque haya una excepciÃ³n
+            }
+        }
+    }
+    tareas.forEach { it.join() }
+}
+
+=== ARCHIVO: Sockets.kt ===
+package Tema1
+
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.io.PrintWriter
+import java.net.ServerSocket
+import java.net.Socket
+
+fun main() {
+    // Iniciar un servidor de sockets
+    val server = ServerSocket(9999)
+    println("Esperando conexiones...")
+    val client = server.accept()
+    println("Cliente conectado: ${client.inetAddress}")
+
+    // Leer datos del cliente
+    val reader = BufferedReader(InputStreamReader(client.inputStream))
+    var line: String?
+    while (reader.readLine().also { line = it } != null) {
+        println("Recibido del cliente: $line")
+    }
+
+    // Cerrar conexiones
+    reader.close()
+    client.close()
+    server.close()
+}
+
+=== ARCHIVO: Sockets02.kt ===
+package Tema1
+
+import java.io.PrintWriter
+import java.net.Socket
+
+fun main() {
+    val socket = Socket("localhost", 9999)
+
+    val writer = PrintWriter(socket.getOutputStream(), true)
+    writer.println("Hola")
+
+    writer.close()
+    socket.close()
+}
+
